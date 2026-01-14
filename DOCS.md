@@ -123,6 +123,41 @@ Notes:
 - If both `--preview` and `--preview-cli` are set, Finder dialog is used.
 - If `--apply` is not set, the command prints the plan and exits.
 
+### Rename files
+
+Rename all files in a folder (dry-run):
+
+```bash
+yordam-agent rename /path/to/folder --instruction "add date prefix"
+```
+
+Rename selected files (same parent folder):
+
+```bash
+yordam-agent rename /path/to/file1 /path/to/file2 --instruction "add suffix _final"
+```
+
+Preview and apply:
+
+```bash
+yordam-agent rename /path/to/folder --instruction "rename by date" --apply --preview
+```
+
+Common flags:
+
+- `--apply`: execute renames (otherwise dry-run only).
+- `--recursive`: include subfolders.
+- `--include-hidden`: include hidden files.
+- `--max-files N`: cap number of files.
+- `--preview`: Finder dialog preview (macOS only).
+- `--preview-cli`: interactive terminal preview.
+- `--plan-file /path/to/plan.json`: write a JSON plan.
+- `--open-plan`: open the plan file after writing.
+- `--open-preview`: open an HTML preview diagram.
+- `--model MODEL`: override Ollama model.
+- `--policy /path/to/policy.json`: override policy path.
+- `--instruction "..."`: required rename instruction for the AI.
+
 ### Undo a reorg
 
 Undo the most recent run in a folder:

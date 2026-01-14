@@ -89,7 +89,27 @@ Or undo a specific log:
 yordam-agent undo --id ~/Downloads/.yordam-agent/undo-20240101T000000Z.json
 ```
 
-## 7) Rewrite text
+## 7) Rename files (AI-assisted)
+
+Rename all files in a folder (dry-run):
+
+```bash
+yordam-agent rename ~/Downloads --instruction "add date prefix"
+```
+
+Rename selected files (same parent folder):
+
+```bash
+yordam-agent rename ~/Downloads/file1.pdf ~/Downloads/file2.docx --instruction "add suffix _final"
+```
+
+Preview and apply:
+
+```bash
+yordam-agent rename ~/Downloads --instruction "rename by date" --apply --preview
+```
+
+## 8) Rewrite text
 
 Rewrite a file into a tone (creates a new file by default):
 
@@ -122,7 +142,7 @@ Notes:
 - For rewrite, AI logs are written to the input file's folder, or the current working
   directory when using stdin/clipboard.
 
-## 8) Customize policy (optional)
+## 9) Customize policy (optional)
 
 Generate a policy file interactively:
 
@@ -136,7 +156,7 @@ Then rerun reorg with your policy:
 yordam-agent reorg ~/Downloads --apply --policy ~/.config/yordam-agent/policy.json
 ```
 
-## 9) Check configuration
+## 10) Check configuration
 
 ```bash
 yordam-agent config
@@ -144,7 +164,7 @@ yordam-agent config
 
 This prints the config location and current values (including the active policy path).
 
-## 10) Finder right-click actions (optional)
+## 11) Finder right-click actions (optional)
 
 Install Finder Quick Actions for right-click use (single menu for folder or file selection):
 

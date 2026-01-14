@@ -12,6 +12,7 @@ cd /Users/yordamkocatepe/Projects/yordam-agent
 This installs:
 - `Yordam - Reorg`
 - `Yordam - Rewrite`
+- `Yordam - Rename`
 
 If they do not appear, restart Finder:
 
@@ -72,3 +73,52 @@ done
 5) Save as: `Yordam - Rewrite`
 
 Tip: The rewrite command creates a new file next to the original. Use `--in-place` to overwrite.
+
+### Rename files (AI-assisted)
+
+1) New Quick Action
+2) Workflow receives: "files" in "Finder"
+3) Add action: "Run Shell Script" (same settings as above)
+4) Paste this script:
+
+```sh
+files=("$@")
+if [ ${#files[@]} -eq 0 ]; then
+  osascript -e 'display dialog "No files or folders selected." with title "Yordam Agent" buttons {"OK"} default button "OK"'
+  exit 1
+fi
+
+instruction=$(osascript -e 'text returned of (display dialog "Rename instruction (required):" default answer "add date prefix or add suffix or rename by date" with title "Yordam Agent" buttons {"Cancel","Continue"} default button "Continue" cancel button "Cancel")') || exit 0
+instruction="$(echo "$instruction" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+if [ -z "$instruction" ]; then
+  osascript -e 'display dialog "Rename instruction is required." with title "Yordam Agent" buttons {"OK"} default button "OK"'
+  exit 1
+fi
+
+if [ ${#files[@]} -eq 1 ] && [ -d "${files[1]}" ]; then
+  root="${files[1]}"
+else
+  parent="$(dirname "${files[1]}")"
+  for f in "${files[@]}"; do
+    if [ -d "$f" ]; then
+      osascript -e 'display dialog "Select a single folder OR multiple files (no mixed selection)." with title "Yordam Agent" buttons {"OK"} default button "OK"'
+      exit 1
+    fi
+    if [ "$(dirname "$f")" != "$parent" ]; then
+      osascript -e 'display dialog "Selected files must be in the same folder." with title "Yordam Agent" buttons {"OK"} default button "OK"'
+      exit 1
+    fi
+  done
+  root="$parent"
+fi
+
+args=("${files[@]}")
+plan_path="$root/.yordam-agent/rename-plan-$(date -u +%Y%m%dT%H%M%SZ).json"
+"$HOME/bin/yordam-agent" rename "${args[@]}" --instruction "$instruction" --apply --preview --plan-file "$plan_path" --open-preview
+status=$?
+if [ $status -ne 0 ]; then
+  osascript -e 'display dialog "Yordam rename failed. See Terminal output for details." with title "Yordam Agent" buttons {"OK"} default button "OK"'
+fi
+```
+
+5) Save as: `Yordam - Rename`

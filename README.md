@@ -2,6 +2,7 @@
 
 Local macOS helper that uses your Ollama model to:
 - Reorganize folders by filetype + context (AI-assisted)
+- Rename files via AI instructions (user-confirmed)
 - Rewrite text to a desired tone
 
 No cloud. Runs against your local Ollama instance.
@@ -119,6 +120,26 @@ Rewrite from clipboard (no input file) and copy back to clipboard:
 
 ```bash
 yordam-agent rewrite --tone "concise, professional"
+```
+
+## Rename files (AI-assisted)
+
+Rename all files in a folder:
+
+```bash
+yordam-agent rename /path/to/folder --instruction "add date prefix"
+```
+
+Rename selected files (same parent folder):
+
+```bash
+yordam-agent rename /path/to/file1 /path/to/file2 --instruction "add suffix _final"
+```
+
+Preview and apply:
+
+```bash
+yordam-agent rename /path/to/folder --instruction "rename by date" --apply --preview
 ```
 
 ## Policy (rules + ignores)
