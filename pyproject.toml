@@ -1,0 +1,22 @@
+[project]
+name = "yordam-agent"
+version = "0.1.0"
+description = "Local macOS helper agent for folder organization and text rewrites via Ollama"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Yordam"}]
+
+[project.scripts]
+yordam-agent = "yordam_agent.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
