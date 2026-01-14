@@ -23,12 +23,18 @@ yordam-agent --help
 
 ## Commands
 
-### Reorganize a folder
+### Reorganize a folder or selected files
 
 Dry-run (default):
 
 ```bash
 yordam-agent reorg /path/to/folder
+```
+
+Reorganize selected files (all must be in the same parent folder):
+
+```bash
+yordam-agent reorg /path/to/file1 /path/to/file2
 ```
 
 Apply changes:
@@ -55,6 +61,33 @@ Write a plan file (JSON):
 yordam-agent reorg /path/to/folder --plan-file /path/to/plan.json
 ```
 
+Open a plan file after writing:
+
+```bash
+yordam-agent reorg /path/to/folder --plan-file /path/to/plan.json --open-plan
+```
+
+Open an HTML preview diagram:
+
+```bash
+yordam-agent reorg /path/to/folder --plan-file /path/to/plan.json --open-preview
+```
+
+Enable OCR fallback (if `tesseract` is installed):
+
+```bash
+yordam-agent reorg /path/to/folder --ocr
+```
+
+Ask before enabling OCR (last resort):
+
+```bash
+yordam-agent reorg /path/to/folder --ocr-ask
+```
+
+When `ocr_prompt` is enabled (default), the app will prompt for OCR only after
+Spotlight text extraction fails.
+
 Common flags:
 
 - `--apply`: execute moves (otherwise dry-run only).
@@ -65,8 +98,25 @@ Common flags:
 - `--preview`: Finder dialog preview (macOS only).
 - `--preview-cli`: interactive terminal preview.
 - `--plan-file /path/to/plan.json`: write a JSON plan.
+- `--open-plan`: open the plan file after writing.
+- `--open-preview`: open an HTML preview diagram.
+- `--ocr`: enable OCR fallback for non-text files (requires `tesseract`).
+- `--ocr-ask`: ask to enable OCR when text extraction fails.
 - `--model MODEL`: override Ollama model.
 - `--policy /path/to/policy.json`: override policy path.
+- `--context "..."`: extra context for the AI (e.g., “organize by person name”).
+
+If `--open-plan` or `--open-preview` is set without `--plan-file`, a plan file is created
+under `<target-folder>/.yordam-agent/plan-*.json`. The preview is written alongside it as
+`plan-*.html` when `--open-preview` is used.
+
+If `--context` is provided, the AI is free to choose the best category/subcategory
+scheme based on your instruction. If it can’t decide, it falls back to the default
+type-based categories.
+
+If `--context` mentions organizing by person, the tool groups files under `People/<Name>`.
+If a name cannot be extracted, it uses `People/Unknown`.
+If `--context` is omitted, the tool falls back to `reorg_context` in config (if set).
 
 Notes:
 
@@ -156,7 +206,11 @@ the input file's folder (or current working directory when using stdin/clipboard
 - `max_snippet_chars` (default 4000)
 - `max_files` (default 200)
 - `policy_path` (default `~/.config/yordam-agent/policy.json`)
+- `reorg_context` (default empty string)
 - `ai_log_path` (default `.yordam-agent/ai-interactions.jsonl`)
+- `ai_log_include_response` (default `false`)
+- `ocr_enabled` (default `false`)
+- `ocr_prompt` (default `true`)
 
 Override any value via env vars:
 

@@ -21,12 +21,18 @@ cd /Users/yordamkocatepe/Projects/yordam-agent
 yordam-agent --help
 ```
 
-## Reorganize a folder
+## Reorganize a folder or selected files
 
 Dry-run (default):
 
 ```bash
 yordam-agent reorg /path/to/folder
+```
+
+Reorganize selected files (same parent folder):
+
+```bash
+yordam-agent reorg /path/to/file1 /path/to/file2
 ```
 
 Apply changes:
@@ -52,6 +58,48 @@ Write a plan file (JSON):
 ```bash
 yordam-agent reorg /path/to/folder --plan-file /path/to/plan.json
 ```
+
+Open the plan file after writing:
+
+```bash
+yordam-agent reorg /path/to/folder --plan-file /path/to/plan.json --open-plan
+```
+
+Open an HTML preview diagram:
+
+```bash
+yordam-agent reorg /path/to/folder --plan-file /path/to/plan.json --open-preview
+```
+
+Enable OCR fallback (if `tesseract` is installed):
+
+```bash
+yordam-agent reorg /path/to/folder --ocr
+```
+
+Ask before enabling OCR (last resort):
+
+```bash
+yordam-agent reorg /path/to/folder --ocr-ask
+```
+
+With `--open-plan` or `--open-preview` and no `--plan-file`, a plan is created under
+`/path/to/folder/.yordam-agent/plan-*.json`. The preview is written alongside it as
+`plan-*.html` when `--open-preview` is used.
+
+Add extra context for the AI:
+
+```bash
+yordam-agent reorg /path/to/folder --context "organize by person name"
+```
+
+If `--context` is provided, the AI is free to choose the best category/subcategory
+scheme based on your instruction. If it can’t decide, it falls back to default
+type-based categories.
+
+If `--context` mentions organizing by person, the tool groups files under `People/<Name>`.
+If a name cannot be extracted, it uses `People/Unknown`.
+If `--context` is omitted, the tool uses `reorg_context` from config (if set).
 
 Undo last run for a folder:
 
@@ -121,7 +169,11 @@ Keys:
 - `max_snippet_chars` (default 4000)
 - `max_files` (default 200)
 - `policy_path` (default `~/.config/yordam-agent/policy.json`)
+- `reorg_context` (default empty string)
 - `ai_log_path` (default `.yordam-agent/ai-interactions.jsonl`)
+- `ai_log_include_response` (default `false`)
+- `ocr_enabled` (default `false`)
+- `ocr_prompt` (default `true`)
 
 Override any value via env vars:
 - `YORDAM_OLLAMA_BASE_URL`
@@ -136,7 +188,7 @@ Set `ai_log_path` to an absolute path to centralize logs, or to an empty string 
 
 ## Finder Quick Actions
 
-See `quickactions/README.md` for setup steps (right-click menu).
+See `quickactions/README.md` for setup steps (single menu for folder or file selection).
 
 ## Tests
 

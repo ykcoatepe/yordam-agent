@@ -9,9 +9,16 @@ from .ai_log import append_ai_log, build_log_entry
 
 
 class OllamaClient:
-    def __init__(self, base_url: str, log_path: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        log_path: Optional[Path] = None,
+        *,
+        log_include_response: bool = False,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.log_path = log_path
+        self.log_include_response = log_include_response
 
     def generate(
         self,
@@ -123,5 +130,7 @@ class OllamaClient:
             success=error_type is None,
             error_type=error_type,
             context=context,
+            response_text=response_text,
+            include_response=self.log_include_response,
         )
         append_ai_log(self.log_path, entry)

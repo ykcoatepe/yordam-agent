@@ -15,3 +15,10 @@ EOW
 chmod +x "$BIN_DIR/yordam-agent"
 
 echo "Installed: $BIN_DIR/yordam-agent"
+
+if [ -f "$ROOT_DIR/quickactions/install.sh" ]; then
+  echo "Installing Finder Quick Actions..."
+  if ! /bin/sh "$ROOT_DIR/quickactions/install.sh"; then
+    echo "Quick Actions install failed (see output above)."
+  fi
+fi

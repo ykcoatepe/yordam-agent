@@ -5,7 +5,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from yordam_agent.organize import FileMeta, apply_policy, gather_files  # noqa: E402
+from yordam_agent.organize import (  # noqa: E402
+    FileMeta,
+    _extract_person_from_filename,
+    _extract_person_from_text,
+    apply_policy,
+    gather_files,
+    resolve_reorg_selection,
+)
 
 
 class OrganizeTests(unittest.TestCase):
@@ -58,6 +65,56 @@ class OrganizeTests(unittest.TestCase):
             names = {path.name for path in files}
             self.assertIn("keep.txt", names)
             self.assertNotIn("ignore.txt", names)
+
+    def test_resolve_reorg_selection_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            resolved_root, selected = resolve_reorg_selection([root])
+            self.assertEqual(resolved_root.resolve(), root.resolve())
+            self.assertIsNone(selected)
+
+    def test_resolve_reorg_selection_files_same_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file_a = root / "a.txt"
+            file_b = root / "b.txt"
+            file_a.write_text("a", encoding="utf-8")
+            file_b.write_text("b", encoding="utf-8")
+            resolved_root, selected = resolve_reorg_selection([file_a, file_b])
+            self.assertEqual(resolved_root.resolve(), root.resolve())
+            self.assertEqual(selected, [file_a, file_b])
+
+    def test_resolve_reorg_selection_rejects_multiple_roots(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            other = root / "other"
+            other.mkdir()
+            file_a = root / "a.txt"
+            file_b = other / "b.txt"
+            file_a.write_text("a", encoding="utf-8")
+            file_b.write_text("b", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                resolve_reorg_selection([file_a, file_b])
+
+    def test_resolve_reorg_selection_rejects_folder_in_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file_a = root / "a.txt"
+            file_a.write_text("a", encoding="utf-8")
+            subdir = root / "subdir"
+            subdir.mkdir()
+            with self.assertRaises(ValueError):
+                resolve_reorg_selection([file_a, subdir])
+
+    def test_extract_person_from_filename(self) -> None:
+        name = "Yordam_Kocatepe_CV.docx"
+        person = _extract_person_from_filename(name)
+        self.assertEqual(person, "Yordam Kocatepe")
+
+    def test_extract_person_from_text(self) -> None:
+        text = "Bu belge Cahit Senol Kocatepe icindir."
+        person = _extract_person_from_text(text)
+        self.assertEqual(person, "Cahit Senol Kocatepe")
 
 
 if __name__ == "__main__":

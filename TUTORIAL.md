@@ -23,7 +23,23 @@ yordam-agent reorg ~/Downloads
 
 This prints proposed moves without changing files.
 
-## 3) Preview the plan
+## 3) Reorganize selected files (same folder)
+
+```bash
+yordam-agent reorg ~/Downloads/file1.pdf ~/Downloads/file2.docx
+```
+
+Selected files must share the same parent folder.
+
+Add extra context for the AI:
+
+```bash
+yordam-agent reorg ~/Downloads/file1.pdf ~/Downloads/file2.docx --context "organize by person name"
+```
+
+With context, the AI decides the best category/subcategory scheme to match your request.
+
+## 4) Preview the plan
 
 Finder dialog preview (macOS):
 
@@ -39,7 +55,9 @@ yordam-agent reorg ~/Downloads --apply --preview-cli
 
 If both preview flags are set, Finder preview is used.
 
-## 4) Apply changes
+If text extraction fails for a file, you may be prompted to enable OCR (slower).
+
+## 5) Apply changes
 
 ```bash
 yordam-agent reorg ~/Downloads --apply
@@ -57,7 +75,7 @@ AI interaction logs (metadata only) are written to:
 ~/Downloads/.yordam-agent/ai-interactions.jsonl
 ```
 
-## 5) Undo a reorg
+## 6) Undo a reorg
 
 Undo the most recent run for a folder:
 
@@ -71,7 +89,7 @@ Or undo a specific log:
 yordam-agent undo --id ~/Downloads/.yordam-agent/undo-20240101T000000Z.json
 ```
 
-## 6) Rewrite text
+## 7) Rewrite text
 
 Rewrite a file into a tone (creates a new file by default):
 
@@ -104,7 +122,7 @@ Notes:
 - For rewrite, AI logs are written to the input file's folder, or the current working
   directory when using stdin/clipboard.
 
-## 7) Customize policy (optional)
+## 8) Customize policy (optional)
 
 Generate a policy file interactively:
 
@@ -118,7 +136,7 @@ Then rerun reorg with your policy:
 yordam-agent reorg ~/Downloads --apply --policy ~/.config/yordam-agent/policy.json
 ```
 
-## 8) Check configuration
+## 9) Check configuration
 
 ```bash
 yordam-agent config
@@ -126,9 +144,9 @@ yordam-agent config
 
 This prints the config location and current values (including the active policy path).
 
-## 9) Finder right-click actions (optional)
+## 10) Finder right-click actions (optional)
 
-Install Finder Quick Actions for right-click use:
+Install Finder Quick Actions for right-click use (single menu for folder or file selection):
 
 ```bash
 cd /Users/yordamkocatepe/Projects/yordam-agent
@@ -140,3 +158,5 @@ If they don't appear immediately, restart Finder:
 ```bash
 killall Finder
 ```
+
+The Finder action writes a plan JSON and opens an HTML preview diagram before applying.

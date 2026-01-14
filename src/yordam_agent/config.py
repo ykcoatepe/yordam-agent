@@ -14,6 +14,10 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "max_files": 200,
     "policy_path": str(CONFIG_DIR / "policy.json"),
     "ai_log_path": ".yordam-agent/ai-interactions.jsonl",
+    "ai_log_include_response": False,
+    "reorg_context": "",
+    "ocr_enabled": False,
+    "ocr_prompt": True,
 }
 
 ENV_OVERRIDES = {
