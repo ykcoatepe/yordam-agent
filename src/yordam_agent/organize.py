@@ -385,7 +385,11 @@ def _normalize_match_text(value: str) -> str:
 
 def _context_mentions_person(context: str) -> bool:
     normalized = _normalize_match_text(context)
-    return any(keyword in normalized for keyword in _PERSON_CONTEXT_KEYWORDS)
+    for keyword in _PERSON_CONTEXT_KEYWORDS:
+        pattern = r"\b" + re.escape(keyword) + r"\b"
+        if re.search(pattern, normalized):
+            return True
+    return False
 
 
 def _spotlight_value(path: Path, attribute: str) -> List[str]:
@@ -829,9 +833,13 @@ def write_preview_html(
             context.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         )
         context_html = f"<p><strong>Context:</strong> {safe_context}</p>"
+    def _escape_cell(value: str) -> str:
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
     if rows:
         rows_html = "\n".join(
-            f"<tr><td>{src}</td><td>{dst}</td></tr>" for src, dst in rows
+            f"<tr><td>{_escape_cell(src)}</td><td>{_escape_cell(dst)}</td></tr>"
+            for src, dst in rows
         )
     else:
         rows_html = "<tr><td colspan=\"2\"><em>No moves planned.</em></td></tr>"
