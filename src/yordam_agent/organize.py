@@ -843,6 +843,7 @@ def write_preview_html(
         )
     else:
         rows_html = "<tr><td colspan=\"2\"><em>No moves planned.</em></td></tr>"
+    escaped_root = _escape_cell(str(root))
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -928,7 +929,7 @@ def write_preview_html(
 </head>
 <body>
   <h1>Yordam Agent Preview</h1>
-  <div class="meta">Generated {timestamp} • Target root: {root}</div>
+  <div class="meta">Generated {timestamp} • Target root: {escaped_root}</div>
   {context_html}
   <div class="grid">
     <div class="card">
