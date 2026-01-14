@@ -2,8 +2,10 @@ import fnmatch
 import json
 import mimetypes
 import os
+import re
 import shutil
 import subprocess
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -64,7 +66,58 @@ DEFAULT_CATEGORIES = [
     "Spreadsheets",
     "Archives",
     "Installers",
+    "People",
 ]
+
+_PERSON_CONTEXT_KEYWORDS = {
+    "person",
+    "people",
+    "person name",
+    "name of the person",
+    "by person",
+    "per person",
+    "kisi",
+    "isim",
+    "ad",
+}
+
+_PERSON_NAME_STOPWORDS = {
+    "cv",
+    "resume",
+    "form",
+    "formu",
+    "document",
+    "doc",
+    "docx",
+    "pdf",
+    "report",
+    "statement",
+    "invoice",
+    "tax",
+    "agreement",
+    "contract",
+    "license",
+    "permit",
+    "application",
+    "belge",
+    "belgesi",
+    "dilekce",
+    "beyan",
+    "kabul",
+    "adli",
+    "sicil",
+    "kaydi",
+    "askerlik",
+    "gorev",
+    "tahhut",
+    "teslim",
+    "ibra",
+    "notary",
+    "notarised",
+    "power",
+    "attorney",
+    "icindir",
+}
 
 
 @dataclass
@@ -134,7 +187,52 @@ def _spotlight_snippet(path: Path, max_chars: int) -> str:
     return output[:max_chars]
 
 
-def build_file_meta(path: Path, max_snippet_chars: int) -> FileMeta:
+def _prompt_for_ocr() -> bool:
+    script = (
+        "set theButton to button returned of (display dialog "
+        "\"Text could not be extracted. Use OCR? (slower)\" "
+        "with title \"Yordam Agent\" "
+        "buttons {\"Cancel\", \"Use OCR\"} "
+        "default button \"Use OCR\" cancel button \"Cancel\")\n"
+        "return theButton"
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script], check=False, capture_output=True, text=True
+        )
+        if result.returncode == 0 and result.stdout.strip() == "Use OCR":
+            return True
+        if result.returncode == 0:
+            return False
+    except OSError:
+        pass
+    if not os.isatty(0):
+        return False
+    resp = input("Text could not be extracted. Use OCR? [y/N]: ").strip().lower()
+    return resp.startswith("y")
+
+
+def _ocr_snippet(path: Path, max_chars: int) -> str:
+    if not shutil.which("tesseract"):
+        return ""
+    try:
+        result = subprocess.run(
+            ["tesseract", str(path), "stdout"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    if result.returncode != 0:
+        return ""
+    output = result.stdout.strip()
+    if not output:
+        return ""
+    return output[:max_chars]
+
+
+def build_file_meta(path: Path, max_snippet_chars: int, *, enable_ocr: bool = False) -> FileMeta:
     stat = path.stat()
     ext = file_extension(path)
     mime, _ = mimetypes.guess_type(str(path))
@@ -144,6 +242,8 @@ def build_file_meta(path: Path, max_snippet_chars: int) -> FileMeta:
         snippet = read_text_snippet(path, max_snippet_chars)
     else:
         snippet = _spotlight_snippet(path, max_snippet_chars)
+        if not snippet and enable_ocr:
+            snippet = _ocr_snippet(path, max_snippet_chars)
     modified_iso = datetime.fromtimestamp(stat.st_mtime).isoformat()
     return FileMeta(
         path=path,
@@ -277,6 +377,204 @@ def _fallback_category(group: str) -> Tuple[str, Optional[str]]:
     return "Documents", None
 
 
+def _normalize_match_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    stripped = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+    return stripped.lower()
+
+
+def _context_mentions_person(context: str) -> bool:
+    normalized = _normalize_match_text(context)
+    for keyword in _PERSON_CONTEXT_KEYWORDS:
+        pattern = r"\b" + re.escape(keyword) + r"\b"
+        if re.search(pattern, normalized):
+            return True
+    return False
+
+
+def _spotlight_value(path: Path, attribute: str) -> List[str]:
+    try:
+        result = subprocess.run(
+            ["mdls", "-raw", "-name", attribute, str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return []
+    if result.returncode != 0:
+        return []
+    output = result.stdout.strip()
+    if not output or output == "(null)":
+        return []
+    if output.startswith("(") and output.endswith(")"):
+        items: List[str] = []
+        for line in output[1:-1].splitlines():
+            value = line.strip().strip(",").strip().strip("\"")
+            if value:
+                items.append(value)
+        return items
+    return [output.strip().strip("\"")]
+
+
+def _extract_person_from_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    tokens = re.findall(r"[^\W\d_]+", text, flags=re.UNICODE)
+    if not tokens:
+        return None
+
+    def is_name_token(token: str) -> bool:
+        normalized = _normalize_match_text(token)
+        if not normalized or normalized in _PERSON_NAME_STOPWORDS:
+            return False
+        if any(ch.isdigit() for ch in token):
+            return False
+        return len(normalized) >= 2
+
+    sequences: List[List[str]] = []
+    current: List[str] = []
+    for token in tokens:
+        if is_name_token(token):
+            current.append(token)
+        else:
+            if len(current) >= 2:
+                sequences.append(current)
+            current = []
+    if len(current) >= 2:
+        sequences.append(current)
+    if not sequences:
+        return None
+    selected = max(enumerate(sequences), key=lambda item: (len(item[1]), item[0]))[1][:4]
+    formatted: List[str] = []
+    for token in selected:
+        if any(ch.isupper() for ch in token):
+            formatted.append(token)
+        else:
+            formatted.append(token[0].upper() + token[1:])
+    return " ".join(formatted).strip() or None
+
+
+def _extract_person_from_filename(name: str) -> Optional[str]:
+    base = Path(name).stem
+    cleaned = re.sub(r"[_\-.]+", " ", base)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return None
+    return _extract_person_from_text(cleaned)
+
+
+def _extract_person_from_metadata(path: Path) -> Optional[str]:
+    for attribute in ("kMDItemAuthors", "kMDItemCreator", "kMDItemTitle"):
+        values = _spotlight_value(path, attribute)
+        if not values:
+            continue
+        candidate = _extract_person_from_text(" ".join(values))
+        if candidate:
+            return candidate
+    return None
+
+
+def _extract_person_from_ai(
+    meta: FileMeta, client: OllamaClient, model: str
+) -> Optional[str]:
+    system = (
+        "You extract a person's full name from file metadata. "
+        "Return a best guess if present; otherwise return null."
+    )
+    prompt = (
+        "Extract the person's full name from this file metadata.\n"
+        f"File name: {meta.name}\n"
+        f"Extension: {meta.extension or 'none'}\n"
+        f"Type group: {meta.type_group}\n"
+        f"Size bytes: {meta.size_bytes}\n"
+        f"Modified: {meta.modified_iso}\n"
+        f"Snippet: {meta.snippet[:800]}\n\n"
+        "Return ONLY JSON: {\"person\": \"...\"} or {\"person\": null}."
+    )
+    raw = client.generate(
+        model=model,
+        prompt=prompt,
+        system=system,
+        temperature=0.2,
+        log_context={
+            "operation": "reorg-extract-person",
+            "extension": meta.extension,
+            "type_group": meta.type_group,
+        },
+    )
+    parsed = extract_json_object(raw)
+    if not parsed:
+        return None
+    person = parsed.get("person")
+    if isinstance(person, str):
+        person = person.strip()
+    else:
+        person = None
+    return person or None
+
+
+def _classify_by_person(
+    meta: FileMeta, client: OllamaClient, model: str
+) -> Tuple[str, Optional[str]]:
+    person = _extract_person_from_filename(meta.name)
+    if not person:
+        person = _extract_person_from_metadata(meta.path)
+    if not person:
+        person = _extract_person_from_text(meta.snippet)
+    if not person:
+        person = _extract_person_from_ai(meta, client, model)
+    if not person:
+        return "People", "Unknown"
+    return "People", person
+
+
+def _classify_with_context(
+    meta: FileMeta, client: OllamaClient, model: str, context: str
+) -> Tuple[str, Optional[str]]:
+    system = (
+        "You are a careful file organization assistant. "
+        "Use the user's intent to choose a category and optional subcategory. "
+        "Use short Title Case names without slashes. "
+        "Prefer stable categories."
+    )
+    prompt = (
+        f"User intent: {context}\n\n"
+        "Given this file metadata, choose a category and optional subcategory.\n"
+        f"File name: {meta.name}\n"
+        f"Extension: {meta.extension or 'none'}\n"
+        f"Type group: {meta.type_group}\n"
+        f"Size bytes: {meta.size_bytes}\n"
+        f"Modified: {meta.modified_iso}\n"
+        f"Snippet: {meta.snippet[:800]}\n\n"
+        "Return ONLY JSON: {\"category\": \"...\", \"subcategory\": \"...\"}. "
+        "If subcategory is not needed, use null."
+    )
+    raw = client.generate(
+        model=model,
+        prompt=prompt,
+        system=system,
+        temperature=0.2,
+        log_context={
+            "operation": "reorg-classify-context",
+            "extension": meta.extension,
+            "type_group": meta.type_group,
+        },
+    )
+    parsed = extract_json_object(raw)
+    if not parsed:
+        return _fallback_category(meta.type_group)
+    category = str(parsed.get("category", "")).strip()
+    subcategory = parsed.get("subcategory")
+    if isinstance(subcategory, str):
+        subcategory = subcategory.strip()
+    else:
+        subcategory = None
+    if not category:
+        return _fallback_category(meta.type_group)
+    return category, subcategory
+
+
 def classify_file(
     meta: FileMeta,
     client: OllamaClient,
@@ -287,6 +585,12 @@ def classify_file(
     override = apply_policy(meta, policy)
     if override:
         return override
+    if context and _context_mentions_person(context):
+        category, subcategory = _classify_by_person(meta, client, model)
+        return category, sanitize_folder_name(subcategory) if subcategory else None
+    if context:
+        category, subcategory = _classify_with_context(meta, client, model, context)
+        return category, sanitize_folder_name(subcategory) if subcategory else None
     system = (
         "You are a careful file organization assistant. "
         "Choose a stable category and optional subcategory for a file. "
@@ -360,6 +664,7 @@ def plan_reorg(
     policy: Dict[str, object],
     files: Optional[List[Path]] = None,
     context: Optional[str] = None,
+    ocr_mode: str = "off",
 ) -> List[MoveOp]:
     ignore_patterns = policy.get("ignore_patterns", [])
     if not isinstance(ignore_patterns, list):
@@ -388,8 +693,16 @@ def plan_reorg(
     if max_files and len(files) > max_files:
         files = files[:max_files]
     moves: List[MoveOp] = []
+    ocr_decision: Optional[bool] = True if ocr_mode == "on" else None
     for path in files:
         meta = build_file_meta(path, max_snippet_chars=max_snippet_chars)
+        needs_ocr = not meta.snippet and not is_text_extension(meta.extension)
+        if ocr_mode == "ask" and needs_ocr and ocr_decision is None:
+            ocr_decision = _prompt_for_ocr()
+        if (ocr_mode == "on" or ocr_decision is True) and needs_ocr:
+            meta = build_file_meta(
+                path, max_snippet_chars=max_snippet_chars, enable_ocr=True
+            )
         category, subcategory = classify_file(
             meta, client=client, model=model, policy=policy, context=context
         )
@@ -458,6 +771,186 @@ def write_plan_file(
         payload["context"] = context
     ensure_dir(path.parent)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+def write_preview_html(
+    root: Path,
+    moves: Iterable[MoveOp],
+    path: Path,
+    *,
+    context: Optional[str] = None,
+) -> Path:
+    tree: Dict[str, Dict] = {}
+    rows: List[Tuple[str, str]] = []
+    for move in moves:
+        try:
+            rel_src = move.src.relative_to(root)
+        except ValueError:
+            rel_src = move.src
+        try:
+            rel_dst = move.dst.relative_to(root)
+        except ValueError:
+            rel_dst = move.dst
+        rows.append((str(rel_src), str(rel_dst)))
+        parts = rel_dst.parts
+        if not parts:
+            continue
+        *dir_parts, filename = parts
+        node = tree
+        for part in dir_parts:
+            node = node.setdefault(part, {})
+        files = node.setdefault("__files__", [])
+        if filename:
+            files.append(filename)
+
+    def render_tree(node: Dict[str, Dict], prefix: str = "") -> List[str]:
+        lines: List[str] = []
+        files = sorted(node.get("__files__", []))
+        dirs = sorted([key for key in node.keys() if key != "__files__"])
+        entries: List[Tuple[str, str]] = [(name, "file") for name in files] + [
+            (name, "dir") for name in dirs
+        ]
+        for idx, (name, kind) in enumerate(entries):
+            is_last = idx == len(entries) - 1
+            connector = "`-- " if is_last else "|-- "
+            suffix = "/" if kind == "dir" else ""
+            lines.append(f"{prefix}{connector}{name}{suffix}")
+            if kind == "dir":
+                extension = "    " if is_last else "|   "
+                lines.extend(render_tree(node[name], prefix + extension))
+        return lines
+
+    tree_lines = render_tree(tree)
+    tree_text = "\n".join(tree_lines) if tree_lines else "(no moves)"
+    escaped_tree = (
+        tree_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%SZ")
+    context_html = ""
+    if context:
+        safe_context = (
+            context.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        context_html = f"<p><strong>Context:</strong> {safe_context}</p>"
+    def _escape_cell(value: str) -> str:
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    if rows:
+        rows_html = "\n".join(
+            f"<tr><td>{_escape_cell(src)}</td><td>{_escape_cell(dst)}</td></tr>"
+            for src, dst in rows
+        )
+    else:
+        rows_html = "<tr><td colspan=\"2\"><em>No moves planned.</em></td></tr>"
+    escaped_root = _escape_cell(str(root))
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Yordam Agent Preview</title>
+  <style>
+    :root {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #f7f7f9;
+      --text: #111;
+      --muted: #5b5b66;
+      --card: #ffffff;
+      --border: #d7d7dc;
+      --pre-bg: #f0f0f3;
+      --pre-text: #111;
+      --table-row: #f9f9fb;
+      --table-head: #f1f1f4;
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --bg: #0f0f12;
+        --text: #f2f2f6;
+        --muted: #b1b1bd;
+        --card: #17171d;
+        --border: #2a2a33;
+        --pre-bg: #101018;
+        --pre-text: #f2f2f6;
+        --table-row: #1b1b23;
+        --table-head: #22222b;
+      }}
+    }}
+    body {{
+      margin: 24px;
+      max-width: 1100px;
+      background: var(--bg);
+      color: var(--text);
+    }}
+    h1 {{ margin: 0 0 8px; }}
+    h2 {{ margin: 0 0 12px; }}
+    .meta {{ color: var(--muted); font-size: 0.9rem; margin-bottom: 16px; }}
+    .grid {{ display: grid; grid-template-columns: 1fr; gap: 20px; }}
+    pre {{
+      background: var(--pre-bg);
+      color: var(--pre-text);
+      padding: 16px;
+      border-radius: 8px;
+      overflow: auto;
+      white-space: pre;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 1.4;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      color: var(--text);
+      border-radius: 8px;
+      overflow: hidden;
+    }}
+    th, td {{
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }}
+    th {{
+      position: sticky;
+      top: 0;
+      background: var(--table-head);
+      color: var(--text);
+    }}
+    tbody tr:nth-child(even) {{
+      background: var(--table-row);
+    }}
+    .card {{
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      background: var(--card);
+    }}
+  </style>
+</head>
+<body>
+  <h1>Yordam Agent Preview</h1>
+  <div class="meta">Generated {timestamp} • Target root: {escaped_root}</div>
+  {context_html}
+  <div class="grid">
+    <div class="card">
+      <h2>Destination Tree</h2>
+      <pre>{escaped_tree}</pre>
+    </div>
+    <div class="card">
+      <h2>Move List</h2>
+      <table>
+        <thead><tr><th>From</th><th>To</th></tr></thead>
+        <tbody>
+          {rows_html}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
+"""
+    ensure_dir(path.parent)
+    path.write_text(html, encoding="utf-8")
     return path
 
 

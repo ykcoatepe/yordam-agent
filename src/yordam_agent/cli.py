@@ -15,6 +15,7 @@ from .organize import (
     resolve_reorg_selection,
     undo_from_log,
     write_plan_file,
+    write_preview_html,
     write_undo_log,
 )
 from .policy import load_policy
@@ -37,7 +38,7 @@ def _pbcopy(text: str) -> None:
         return
 
 
-def _open_plan_file(path: Path) -> None:
+def _open_path(path: Path) -> None:
     try:
         subprocess.run(["open", str(path)], check=False)
     except OSError:
@@ -184,13 +185,27 @@ def cmd_reorg(args: argparse.Namespace) -> int:
         return 1
     cfg = load_config()
     log_path = resolve_log_path(cfg.get("ai_log_path"), root)
-    client = OllamaClient(cfg["ollama_base_url"], log_path=log_path)
+    client = OllamaClient(
+        cfg["ollama_base_url"],
+        log_path=log_path,
+        log_include_response=bool(cfg.get("ai_log_include_response")),
+    )
     model = args.model or cfg["model"]
     max_snippet_chars = args.max_snippet_chars or cfg["max_snippet_chars"]
     max_files = args.max_files if args.max_files is not None else cfg["max_files"]
     policy_path = Path(args.policy or cfg["policy_path"]).expanduser()
     policy = load_policy(policy_path)
     context = args.context if args.context is not None else cfg.get("reorg_context", "")
+    if args.ocr:
+        ocr_mode = "on"
+    elif args.ocr_ask:
+        ocr_mode = "ask"
+    elif bool(cfg.get("ocr_enabled")):
+        ocr_mode = "on"
+    elif bool(cfg.get("ocr_prompt")):
+        ocr_mode = "ask"
+    else:
+        ocr_mode = "off"
     if isinstance(context, str):
         context = context.strip()
     if not context:
@@ -207,23 +222,38 @@ def cmd_reorg(args: argparse.Namespace) -> int:
         policy=policy,
         files=selected_files,
         context=context,
+        ocr_mode=ocr_mode,
     )
 
     if not moves:
         print("No moves planned.")
         return 0
 
+    timestamp: Optional[str] = None
     plan_path: Optional[Path] = None
     if args.plan_file:
         plan_path = Path(args.plan_file).expanduser()
-    elif args.open_plan:
+    elif args.open_plan or args.open_preview:
         timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
         plan_path = root / ".yordam-agent" / f"plan-{timestamp}.json"
     if plan_path:
         write_plan_file(root, moves, plan_path, context=context)
         print(f"Plan written: {plan_path}")
-        if args.open_plan:
-            _open_plan_file(plan_path)
+
+    preview_path: Optional[Path] = None
+    if args.open_preview:
+        if plan_path:
+            preview_path = plan_path.with_suffix(".html")
+        else:
+            if not timestamp:
+                timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            preview_path = root / ".yordam-agent" / f"preview-{timestamp}.html"
+        write_preview_html(root, moves, preview_path, context=context)
+
+    if plan_path and args.open_plan:
+        _open_path(plan_path)
+    if preview_path:
+        _open_path(preview_path)
 
     if not (args.preview or args.preview_cli):
         for move in moves:
@@ -326,7 +356,11 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
 
     log_root = input_path.parent if input_path else Path.cwd()
     log_path = resolve_log_path(cfg.get("ai_log_path"), log_root)
-    client = OllamaClient(cfg["ollama_base_url"], log_path=log_path)
+    client = OllamaClient(
+        cfg["ollama_base_url"],
+        log_path=log_path,
+        log_include_response=bool(cfg.get("ai_log_include_response")),
+    )
     log_context = {"operation": "rewrite", "source": source}
     if input_path and input_path.suffix:
         log_context["extension"] = input_path.suffix.lower()
@@ -388,8 +422,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="yordam-agent")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    reorg = sub.add_parser("reorg", help="Reorganize a folder using AI")
-    reorg.add_argument("folder", help="Target folder")
+    reorg = sub.add_parser("reorg", help="Reorganize files using AI")
+    reorg.add_argument("paths", nargs="+", help="Target folder or file paths")
     reorg.add_argument("--apply", action="store_true", help="Apply changes (default is dry-run)")
     reorg.add_argument("--recursive", action="store_true", help="Include subfolders")
     reorg.add_argument("--include-hidden", action="store_true", help="Include hidden files")
@@ -404,8 +438,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Interactive CLI preview (useful for long lists)",
     )
     reorg.add_argument("--plan-file", type=str, default=None, help="Write plan JSON to file")
+    reorg.add_argument(
+        "--open-plan", action="store_true", help="Open plan file after writing"
+    )
+    reorg.add_argument(
+        "--open-preview", action="store_true", help="Open HTML preview diagram"
+    )
     reorg.add_argument("--model", type=str, default=None, help="Ollama model override")
     reorg.add_argument("--policy", type=str, default=None, help="Policy JSON path override")
+    reorg.add_argument("--context", type=str, default=None, help="Extra context for AI")
+    reorg.add_argument(
+        "--ocr",
+        action="store_true",
+        help="Enable OCR fallback for non-text files (requires tesseract)",
+    )
+    reorg.add_argument(
+        "--ocr-ask",
+        action="store_true",
+        help="Ask to enable OCR when text extraction fails",
+    )
     reorg.set_defaults(func=cmd_reorg)
 
     undo = sub.add_parser("undo", help="Undo the last reorg")

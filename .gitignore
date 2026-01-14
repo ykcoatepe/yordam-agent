@@ -46,6 +46,7 @@ dmypy.json
 
 # Logs
 *.log
+.yordam-agent/
 
 # Environment variables
 .env

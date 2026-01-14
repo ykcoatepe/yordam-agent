@@ -20,6 +20,15 @@ fi
 
 mkdir -p "$SERVICES_DIR"
 
+cleanup_legacy_workflows() {
+  rm -rf \
+    "$SERVICES_DIR/Yordam - Reorg (Dry Run).workflow" \
+    "$SERVICES_DIR/Yordam - Reorg (Apply + Preview).workflow" \
+    "$SERVICES_DIR/Yordam - Reorg Selected Files.workflow"
+}
+
+cleanup_legacy_workflows
+
 install_workflow() {
   name="$1"
   bundle_id="$2"
@@ -110,17 +119,43 @@ except FileNotFoundError:
 PY
 }
 
-reorg_dry=$(cat <<'EOF'
-for f in "$@"; do
-  "$HOME/bin/yordam-agent" reorg "$f"
-done
-EOF
-)
+reorg_files=$(cat <<'EOF'
+files=("$@")
+if [ ${#files[@]} -eq 0 ]; then
+  osascript -e 'display dialog "No files or folders selected." with title "Yordam Agent" buttons {"OK"} default button "OK"'
+  exit 1
+fi
 
-reorg_apply_preview=$(cat <<'EOF'
-for f in "$@"; do
-  "$HOME/bin/yordam-agent" reorg "$f" --apply --preview
-done
+context=$(osascript -e 'text returned of (display dialog "Reorg context (optional):" default answer "" with title "Yordam Agent" buttons {"Cancel","Continue"} default button "Continue" cancel button "Cancel")') || exit 0
+
+if [ ${#files[@]} -eq 1 ] && [ -d "${files[1]}" ]; then
+  root="${files[1]}"
+else
+  parent="$(dirname "${files[1]}")"
+  for f in "${files[@]}"; do
+    if [ -d "$f" ]; then
+      osascript -e 'display dialog "Select a single folder OR multiple files (no mixed selection)." with title "Yordam Agent" buttons {"OK"} default button "OK"'
+      exit 1
+    fi
+    if [ "$(dirname "$f")" != "$parent" ]; then
+      osascript -e 'display dialog "Selected files must be in the same folder." with title "Yordam Agent" buttons {"OK"} default button "OK"'
+      exit 1
+    fi
+  done
+  root="$parent"
+fi
+
+args=("${files[@]}")
+if [ -n "$context" ]; then
+  args+=("--context" "$context")
+fi
+
+plan_path="$root/.yordam-agent/plan-$(date -u +%Y%m%dT%H%M%SZ).json"
+"$HOME/bin/yordam-agent" reorg "${args[@]}" --apply --preview --plan-file "$plan_path" --open-preview --ocr-ask
+status=$?
+if [ $status -ne 0 ]; then
+  osascript -e 'display dialog "Yordam reorg failed. See Terminal output for details." with title "Yordam Agent" buttons {"OK"} default button "OK"'
+fi
 EOF
 )
 
@@ -132,9 +167,8 @@ done
 EOF
 )
 
-install_workflow "Yordam - Reorg (Dry Run)" "com.yordam.agent.reorgDryRun" "public.folder" "com.apple.Automator.fileSystemObject.folder" "$reorg_dry"
-install_workflow "Yordam - Reorg (Apply + Preview)" "com.yordam.agent.reorgApplyPreview" "public.folder" "com.apple.Automator.fileSystemObject.folder" "$reorg_apply_preview"
-install_workflow "Yordam - Rewrite" "com.yordam.agent.rewrite" "public.text" "com.apple.Automator.fileSystemObject.text" "$rewrite_prompt"
+install_workflow "Yordam - Reorg" "com.yordam.agent.reorg" "public.item" "com.apple.Automator.fileSystemObject" "$reorg_files"
+install_workflow "Yordam - Rewrite" "com.yordam.agent.rewrite" "public.text" "com.apple.Automator.fileSystemObject" "$rewrite_prompt"
 
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 if [ -x "$LSREGISTER" ]; then

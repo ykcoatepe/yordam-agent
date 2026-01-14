@@ -52,6 +52,8 @@ def build_log_entry(
     success: bool,
     error_type: Optional[str],
     context: Optional[Dict[str, Any]],
+    response_text: Optional[str] = None,
+    include_response: bool = False,
 ) -> Dict[str, Any]:
     entry: Dict[str, Any] = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -70,6 +72,8 @@ def build_log_entry(
     safe_context = _sanitize_context(context)
     if safe_context:
         entry["context"] = safe_context
+    if include_response and response_text is not None:
+        entry["response"] = response_text
     return entry
 
 
