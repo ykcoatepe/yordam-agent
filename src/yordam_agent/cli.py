@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +18,13 @@ from .organize import (
     write_plan_file,
     write_preview_html,
     write_undo_log,
+)
+from .rename import (
+    apply_renames,
+    plan_rename,
+    resolve_rename_selection,
+    write_rename_plan_file,
+    write_rename_preview_html,
 )
 from .policy import load_policy
 from .policy_wizard import run_policy_wizard
@@ -127,6 +135,50 @@ def _preview_dialog(message: str, allow_apply: bool) -> Optional[str]:
     return result.stdout.strip() or None
 
 
+def _rename_preview_summary(ops: List) -> List[str]:
+    total = len(ops)
+    return [f"{total} file(s) will be renamed."]
+
+
+def _rename_preview_message(ops: List, root: Path) -> str:
+    lines = _rename_preview_summary(ops)
+    preview = ops[:10]
+    if preview:
+        lines.append("")
+    for op in preview:
+        try:
+            rel_src = op.src.relative_to(root)
+            rel_dst = op.dst.relative_to(root)
+        except ValueError:
+            rel_src = op.src
+            rel_dst = op.dst
+        lines.append(f"{rel_src} -> {rel_dst}")
+    if len(ops) > len(preview):
+        lines.append(f"... and {len(ops) - len(preview)} more")
+    return "\n".join(lines)
+
+
+def _rename_preview_dialog_message(ops: List, root: Path) -> str:
+    total = len(ops)
+    samples: List[str] = []
+    for op in ops[:5]:
+        try:
+            rel_src = op.src.relative_to(root)
+        except ValueError:
+            rel_src = op.src
+        try:
+            rel_dst = op.dst.relative_to(root)
+        except ValueError:
+            rel_dst = op.dst
+        samples.append(f"{rel_src} -> {rel_dst}")
+    sample_text = "; ".join(samples) if samples else ""
+    return (
+        f"{total} file(s) will be renamed. "
+        f"Sample: {sample_text}. "
+        "Use 'Save Plan' for full details."
+    )
+
+
 def _choose_save_path(default_name: str) -> Optional[Path]:
     safe_name = default_name.replace("\"", "")
     script = (
@@ -167,6 +219,27 @@ def _cli_preview(moves: List, root: Path, page_size: int = 20) -> bool:
             if resp.startswith("q"):
                 break
     choice = input("Apply these moves? [y/N]: ").strip().lower()
+    return choice.startswith("y")
+
+
+def _rename_cli_preview(ops: List, root: Path, page_size: int = 20) -> bool:
+    print("\n".join(_rename_preview_summary(ops)))
+    total = len(ops)
+    if total > page_size:
+        index = 0
+        while index < total:
+            chunk = ops[index : index + page_size]
+            for op in chunk:
+                rel_src = op.src.relative_to(root)
+                rel_dst = op.dst.relative_to(root)
+                print(f"{rel_src} -> {rel_dst}")
+            index += page_size
+            if index >= total:
+                break
+            resp = input("Show more? [Enter=next, q=quit]: ").strip().lower()
+            if resp.startswith("q"):
+                break
+    choice = input("Apply these renames? [y/N]: ").strip().lower()
     return choice.startswith("y")
 
 
@@ -303,6 +376,138 @@ def cmd_reorg(args: argparse.Namespace) -> int:
     applied = apply_moves(root, moves)
     log_path = write_undo_log(root, applied)
     print(f"Applied {len(applied)} moves. Undo log: {log_path}")
+    return 0
+
+
+def _prompt_instruction() -> Optional[str]:
+    if not os.isatty(0):
+        return None
+    try:
+        value = input("Rename instruction: ").strip()
+    except (EOFError, OSError):
+        return None
+    return value or None
+
+
+def cmd_rename(args: argparse.Namespace) -> int:
+    raw_paths = [Path(p).expanduser().resolve() for p in args.paths]
+    try:
+        root, selected_files = resolve_rename_selection(raw_paths)
+    except ValueError as exc:
+        print(str(exc))
+        return 1
+    if selected_files is None and (not root.exists() or not root.is_dir()):
+        print(f"Folder not found: {root}")
+        return 1
+    if selected_files is not None and not root.exists():
+        print(f"Parent folder not found: {root}")
+        return 1
+
+    instruction = args.instruction.strip() if args.instruction else ""
+    if not instruction:
+        instruction = _prompt_instruction() or ""
+    if not instruction:
+        print("Rename instruction is required. Use --instruction.")
+        return 1
+
+    cfg = load_config()
+    log_path = resolve_log_path(cfg.get("ai_log_path"), root)
+    client = OllamaClient(
+        cfg["ollama_base_url"],
+        log_path=log_path,
+        log_include_response=bool(cfg.get("ai_log_include_response")),
+    )
+    model = args.model or cfg["model"]
+    policy_path = Path(args.policy or cfg["policy_path"]).expanduser()
+
+    ops = plan_rename(
+        root,
+        instruction=instruction,
+        recursive=args.recursive,
+        include_hidden=args.include_hidden,
+        max_files=args.max_files if args.max_files is not None else cfg["max_files"],
+        client=client,
+        model=model,
+        policy_path=policy_path,
+        files=selected_files,
+    )
+
+    if not ops:
+        print("No renames planned.")
+        return 0
+
+    timestamp: Optional[str] = None
+    plan_path: Optional[Path] = None
+    if args.plan_file:
+        plan_path = Path(args.plan_file).expanduser()
+    elif args.open_plan or args.open_preview:
+        timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        plan_path = root / ".yordam-agent" / f"rename-plan-{timestamp}.json"
+    if plan_path:
+        write_rename_plan_file(root, ops, plan_path, instruction=instruction)
+        print(f"Plan written: {plan_path}")
+
+    preview_path: Optional[Path] = None
+    if args.open_preview:
+        if plan_path:
+            preview_path = plan_path.with_suffix(".html")
+        else:
+            if not timestamp:
+                timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            preview_path = root / ".yordam-agent" / f"rename-preview-{timestamp}.html"
+        write_rename_preview_html(root, ops, preview_path, instruction=instruction)
+
+    if plan_path and args.open_plan:
+        _open_path(plan_path)
+    if preview_path:
+        _open_path(preview_path)
+
+    if not (args.preview or args.preview_cli):
+        for op in ops:
+            rel_src = op.src.relative_to(root)
+            rel_dst = op.dst.relative_to(root)
+            print(f"{rel_src} -> {rel_dst}")
+    else:
+        print(f"{len(ops)} renames planned (preview enabled).")
+
+    use_cli_preview = args.preview_cli
+    if args.preview_cli and args.preview:
+        print("Both preview flags set; using Finder dialog preview.")
+        use_cli_preview = False
+
+    if use_cli_preview:
+        if not _rename_cli_preview(ops, root):
+            print("Preview cancelled.")
+            return 0
+
+    if args.preview and not use_cli_preview:
+        message = _rename_preview_dialog_message(ops, root)
+        choice = _preview_dialog(message, allow_apply=args.apply)
+        if choice == "Save Plan":
+            default_name = f"yordam-rename-{root.name}.json"
+            save_path = _choose_save_path(default_name)
+            if not save_path:
+                print("Save cancelled.")
+                return 0
+            write_rename_plan_file(root, ops, save_path, instruction=instruction)
+            print(f"Plan written: {save_path}")
+            if args.apply:
+                choice = _preview_dialog(message, allow_apply=True)
+            else:
+                return 0
+        if choice in {None, "Cancel", "OK"}:
+            print("Preview cancelled.")
+            return 0
+        if choice == "Apply" and not args.apply:
+            print("--apply not set; dry run only.")
+            return 0
+
+    if not args.apply:
+        print(f"Dry run. {len(ops)} renames planned. Use --apply to execute.")
+        return 0
+
+    applied = apply_renames(ops)
+    print(f"Applied {len(applied)} renames.")
     return 0
 
 
@@ -458,6 +663,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ask to enable OCR when text extraction fails",
     )
     reorg.set_defaults(func=cmd_reorg)
+
+    rename = sub.add_parser("rename", help="Rename files using AI")
+    rename.add_argument("paths", nargs="+", help="Target folder or file paths")
+    rename.add_argument("--instruction", type=str, default=None, help="Rename instruction")
+    rename.add_argument("--apply", action="store_true", help="Apply changes (default is dry-run)")
+    rename.add_argument("--recursive", action="store_true", help="Include subfolders")
+    rename.add_argument("--include-hidden", action="store_true", help="Include hidden files")
+    rename.add_argument("--max-files", type=int, default=None, help="Max files to process")
+    rename.add_argument("--preview", action="store_true", help="Show Finder dialog before apply")
+    rename.add_argument(
+        "--preview-cli",
+        action="store_true",
+        help="Interactive CLI preview (useful for long lists)",
+    )
+    rename.add_argument("--plan-file", type=str, default=None, help="Write plan JSON to file")
+    rename.add_argument(
+        "--open-plan", action="store_true", help="Open plan file after writing"
+    )
+    rename.add_argument(
+        "--open-preview", action="store_true", help="Open HTML preview diagram"
+    )
+    rename.add_argument("--model", type=str, default=None, help="Ollama model override")
+    rename.add_argument("--policy", type=str, default=None, help="Policy JSON path override")
+    rename.set_defaults(func=cmd_rename)
 
     undo = sub.add_parser("undo", help="Undo the last reorg")
     undo.add_argument("--folder", type=str, default=None, help="Folder that was reorganized")
