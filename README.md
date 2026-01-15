@@ -108,6 +108,37 @@ Undo last run for a folder:
 yordam-agent undo --folder /path/to/folder
 ```
 
+## Documents organizer (sentinel for ~/Documents)
+
+Run the Documents organizer once (uses its own config and rules):
+
+```bash
+yordam-agent documents
+```
+
+Config (auto-created, migrates from `~/Projects/DocumentsOrganizer/config.json` if present):
+
+```
+~/.config/yordam-agent/documents-organizer.json
+```
+
+Install the LaunchAgent watcher (triggers on new files in `~/Documents`):
+
+```bash
+./scripts/install-documents-organizer.sh
+```
+
+Logs are written to:
+
+```
+~/Library/Logs/yordam-agent/organizer.log
+~/Library/Logs/yordam-agent/organizer.error.log
+```
+
+You can add extra AI steering with `ai_context` in the documents config file.
+If needed, set `ai_backend` to `cli` (uses `ollama run`) or keep `http` (default, uses
+the Ollama HTTP API). `ollama_base_url` and `ai_timeout_seconds` are supported there too.
+
 ## Rewrite text
 
 Rewrite a file into a tone (new file by default):
@@ -185,8 +216,10 @@ Config file (auto-created on first run):
 
 Keys:
 - `ollama_base_url` (default `http://localhost:11434`)
-- `model` (default `gpt-oss:20b`)
-- `rewrite_model` (default `gpt-oss:20b-instruct`)
+- `model` (default `deepseek-r1:8b`)
+- `model_secondary` (default `gpt-oss:20b`)
+- `rewrite_model` (default `deepseek-r1:8b`)
+- `rewrite_model_secondary` (default `gpt-oss:20b`)
 - `max_snippet_chars` (default 4000)
 - `max_files` (default 200)
 - `policy_path` (default `~/.config/yordam-agent/policy.json`)
@@ -199,8 +232,18 @@ Keys:
 Override any value via env vars:
 - `YORDAM_OLLAMA_BASE_URL`
 - `YORDAM_MODEL`
+- `YORDAM_MODEL_SECONDARY`
 - `YORDAM_REWRITE_MODEL`
+- `YORDAM_REWRITE_MODEL_SECONDARY`
 - `YORDAM_AI_LOG_PATH`
+
+If the primary model fails, the secondary model is tried.
+Ensure models are available in Ollama, for example:
+
+```bash
+ollama pull deepseek-r1:8b
+ollama pull gpt-oss:20b
+```
 
 AI interaction logs (metadata only; no prompts or responses) are appended to
 `.yordam-agent/ai-interactions.jsonl` relative to the reorg target folder or, for rewrite,

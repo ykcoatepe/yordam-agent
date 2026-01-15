@@ -46,8 +46,8 @@ def _normalize_target_name(proposed: str, src: Path) -> Optional[str]:
     if suffix and suffix.lower() != src.suffix.lower():
         return f"{stem}{src.suffix}"
     if not suffix:
-        return f"{base}{src.suffix}"
-    return base
+        return f"{stem}{src.suffix}"
+    return f"{stem}{suffix}"
 
 
 def _resolve_name_collision(name: str, reserved: Sequence[str]) -> str:
@@ -98,10 +98,21 @@ def _build_rename_prompt(
             "Keep file extensions the same as the original.",
             "Do not include any path separators in 'to'.",
             "If a file should keep its name, omit it from renames.",
+            (
+                "Clean up any double spaces, dangling separators (like '- '), or empty "
+                "brackets that result from removals."
+            ),
+            (
+                "If removing a time or date token leaves a dangling word (like 'at' or "
+                "'on'), remove that word too."
+            ),
+            "Do not leave the filename ending with a dangling word or separator.",
+            "Ensure the output filename looks natural and complete.",
         ],
     }
     prompt = json.dumps(payload, indent=2)
     return system, prompt
+
 
 
 def plan_rename(
@@ -184,11 +195,16 @@ def plan_rename(
         lookup[from_name] = entry
 
     src_names = {path.name for path in files}
-    reserved = {
-        path.name
-        for path in root.iterdir()
-        if path.is_file() and path.name not in src_names
-    }
+    try:
+        reserved = {
+            path.name
+            for path in root.iterdir()
+            if path.is_file() and path.name not in src_names
+        }
+    except PermissionError as exc:
+        raise PermissionError(
+            f"Cannot list directory to check rename collisions: {root}"
+        ) from exc
     planned_targets: set[str] = set()
     planned: List[RenameOp] = []
     for path in files:
