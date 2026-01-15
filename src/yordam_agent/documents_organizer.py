@@ -716,6 +716,12 @@ def main() -> int:
                     destination_dir = rule_destination
                     reason = rule_reason
 
+            if destination_dir.exists() and not destination_dir.is_dir():
+                log(
+                    f"Skipping move for {entry.name}: destination {destination_dir} "
+                    "is a file."
+                )
+                continue
             destination_dir.mkdir(parents=True, exist_ok=True)
             destination_path = resolve_collision(destination_dir / entry.name)
 

@@ -433,17 +433,21 @@ def cmd_rename(args: argparse.Namespace) -> int:
     model = args.model or cfg["model"]
     policy_path = Path(args.policy or cfg["policy_path"]).expanduser()
 
-    ops = plan_rename(
-        root,
-        instruction=instruction,
-        recursive=args.recursive,
-        include_hidden=args.include_hidden,
-        max_files=args.max_files if args.max_files is not None else cfg["max_files"],
-        client=client,
-        model=model,
-        policy_path=policy_path,
-        files=selected_files,
-    )
+    try:
+        ops = plan_rename(
+            root,
+            instruction=instruction,
+            recursive=args.recursive,
+            include_hidden=args.include_hidden,
+            max_files=args.max_files if args.max_files is not None else cfg["max_files"],
+            client=client,
+            model=model,
+            policy_path=policy_path,
+            files=selected_files,
+        )
+    except PermissionError as exc:
+        print(str(exc))
+        return 1
 
     if not ops:
         print("No renames planned.")

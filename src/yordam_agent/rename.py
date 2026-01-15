@@ -201,8 +201,10 @@ def plan_rename(
             for path in root.iterdir()
             if path.is_file() and path.name not in src_names
         }
-    except PermissionError:
-        reserved = set()
+    except PermissionError as exc:
+        raise PermissionError(
+            f"Cannot list directory to check rename collisions: {root}"
+        ) from exc
     planned_targets: set[str] = set()
     planned: List[RenameOp] = []
     for path in files:
