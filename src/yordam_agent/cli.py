@@ -1,13 +1,14 @@
 import argparse
 import os
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-import subprocess
 from typing import Dict, List, Optional
 
 from .ai_log import resolve_log_path
 from .config import config_path, load_config
+from .documents_organizer import main as documents_main
 from .ollama import OllamaClient
 from .organize import (
     apply_moves,
@@ -19,6 +20,8 @@ from .organize import (
     write_preview_html,
     write_undo_log,
 )
+from .policy import load_policy
+from .policy_wizard import run_policy_wizard
 from .rename import (
     apply_renames,
     plan_rename,
@@ -26,8 +29,6 @@ from .rename import (
     write_rename_plan_file,
     write_rename_preview_html,
 )
-from .policy import load_policy
-from .policy_wizard import run_policy_wizard
 from .rewrite import derive_output_path, normalize_tone, rewrite_text
 
 
@@ -113,7 +114,11 @@ def _preview_dialog_message(moves: List, root: Path) -> str:
 def _preview_dialog(message: str, allow_apply: bool) -> Optional[str]:
     trimmed = message if len(message) <= 900 else message[:900] + "..."
     safe = trimmed.replace("\"", "\\\"")
-    buttons = "\"Cancel\", \"Save Plan\", \"Apply\"" if allow_apply else "\"Cancel\", \"Save Plan\", \"OK\""
+    buttons = (
+        "\"Cancel\", \"Save Plan\", \"Apply\""
+        if allow_apply
+        else "\"Cancel\", \"Save Plan\", \"OK\""
+    )
     default_button = "Apply" if allow_apply else "OK"
     script = (
         "set theButton to button returned of (display dialog "
@@ -258,9 +263,13 @@ def cmd_reorg(args: argparse.Namespace) -> int:
         return 1
     cfg = load_config()
     log_path = resolve_log_path(cfg.get("ai_log_path"), root)
+    model_secondary = cfg.get("model_secondary")
+    if isinstance(model_secondary, str):
+        model_secondary = model_secondary.strip() or None
     client = OllamaClient(
         cfg["ollama_base_url"],
         log_path=log_path,
+        fallback_model=model_secondary,
         log_include_response=bool(cfg.get("ai_log_include_response")),
     )
     model = args.model or cfg["model"]
@@ -412,9 +421,13 @@ def cmd_rename(args: argparse.Namespace) -> int:
 
     cfg = load_config()
     log_path = resolve_log_path(cfg.get("ai_log_path"), root)
+    model_secondary = cfg.get("model_secondary")
+    if isinstance(model_secondary, str):
+        model_secondary = model_secondary.strip() or None
     client = OllamaClient(
         cfg["ollama_base_url"],
         log_path=log_path,
+        fallback_model=model_secondary,
         log_include_response=bool(cfg.get("ai_log_include_response")),
     )
     model = args.model or cfg["model"]
@@ -561,9 +574,13 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
 
     log_root = input_path.parent if input_path else Path.cwd()
     log_path = resolve_log_path(cfg.get("ai_log_path"), log_root)
+    model_secondary = cfg.get("rewrite_model_secondary")
+    if isinstance(model_secondary, str):
+        model_secondary = model_secondary.strip() or None
     client = OllamaClient(
         cfg["ollama_base_url"],
         log_path=log_path,
+        fallback_model=model_secondary,
         log_include_response=bool(cfg.get("ai_log_include_response")),
     )
     log_context = {"operation": "rewrite", "source": source}
@@ -621,6 +638,10 @@ def cmd_policy_wizard(args: argparse.Namespace) -> int:
     action = "overwrote" if overwrite else "updated"
     print(f"Policy {action}: {path}")
     return 0
+
+
+def cmd_documents(_: argparse.Namespace) -> int:
+    return documents_main()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -708,6 +729,12 @@ def build_parser() -> argparse.ArgumentParser:
     policy = sub.add_parser("policy-wizard", help="Interactive policy generator")
     policy.add_argument("--policy", type=str, default=None, help="Policy JSON path override")
     policy.set_defaults(func=cmd_policy_wizard)
+
+    documents = sub.add_parser(
+        "documents",
+        help="Run the Documents folder organizer (launch agent compatible)",
+    )
+    documents.set_defaults(func=cmd_documents)
 
     return parser
 

@@ -152,8 +152,8 @@ fi
 
 plan_path="$root/.yordam-agent/plan-$(date -u +%Y%m%dT%H%M%SZ).json"
 "$HOME/bin/yordam-agent" reorg "${args[@]}" --apply --preview --plan-file "$plan_path" --open-preview --ocr-ask
-status=$?
-if [ $status -ne 0 ]; then
+exit_code=$?
+if [ $exit_code -ne 0 ]; then
   osascript -e 'display dialog "Yordam reorg failed. See Terminal output for details." with title "Yordam Agent" buttons {"OK"} default button "OK"'
 fi
 EOF
@@ -200,9 +200,9 @@ fi
 
 args=("${files[@]}")
 plan_path="$root/.yordam-agent/rename-plan-$(date -u +%Y%m%dT%H%M%SZ).json"
-"$HOME/bin/yordam-agent" rename "${args[@]}" --instruction "$instruction" --apply --preview --plan-file "$plan_path" --open-preview
-status=$?
-if [ $status -ne 0 ]; then
+"$HOME/bin/yordam-agent" rename "${args[@]}" --instruction "$instruction" --apply --preview --plan-file "$plan_path" --open-preview > /tmp/yordam_debug.log 2>&1
+exit_code=$?
+if [ $exit_code -ne 0 ]; then
   osascript -e 'display dialog "Yordam rename failed. See Terminal output for details." with title "Yordam Agent" buttons {"OK"} default button "OK"'
 fi
 EOF

@@ -8,8 +8,10 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "ollama_base_url": "http://localhost:11434",
-    "model": "gpt-oss:20b",
-    "rewrite_model": "gpt-oss:20b-instruct",
+    "model": "deepseek-r1:8b",
+    "model_secondary": "gpt-oss:20b",
+    "rewrite_model": "deepseek-r1:8b",
+    "rewrite_model_secondary": "gpt-oss:20b",
     "max_snippet_chars": 4000,
     "max_files": 200,
     "policy_path": str(CONFIG_DIR / "policy.json"),
@@ -23,7 +25,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
 ENV_OVERRIDES = {
     "YORDAM_OLLAMA_BASE_URL": "ollama_base_url",
     "YORDAM_MODEL": "model",
+    "YORDAM_MODEL_SECONDARY": "model_secondary",
     "YORDAM_REWRITE_MODEL": "rewrite_model",
+    "YORDAM_REWRITE_MODEL_SECONDARY": "rewrite_model_secondary",
     "YORDAM_AI_LOG_PATH": "ai_log_path",
 }
 

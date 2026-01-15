@@ -137,6 +137,12 @@ Rename selected files (same parent folder):
 yordam-agent rename /path/to/file1 /path/to/file2 --instruction "add suffix _final"
 ```
 
+Example (remove trailing time tokens cleanly):
+
+```bash
+yordam-agent rename /path/to/folder --instruction "remove trailing time tokens like 'at HH.MM.SS' and any dangling words"
+```
+
 Preview and apply:
 
 ```bash
@@ -236,8 +242,10 @@ the input file's folder (or current working directory when using stdin/clipboard
 ## Configuration keys
 
 - `ollama_base_url` (default `http://localhost:11434`)
-- `model` (default `gpt-oss:20b`)
-- `rewrite_model` (default `gpt-oss:20b-instruct`)
+- `model` (default `deepseek-r1:8b`)
+- `model_secondary` (default `gpt-oss:20b`)
+- `rewrite_model` (default `deepseek-r1:8b`)
+- `rewrite_model_secondary` (default `gpt-oss:20b`)
 - `max_snippet_chars` (default 4000)
 - `max_files` (default 200)
 - `policy_path` (default `~/.config/yordam-agent/policy.json`)
@@ -251,8 +259,18 @@ Override any value via env vars:
 
 - `YORDAM_OLLAMA_BASE_URL`
 - `YORDAM_MODEL`
+- `YORDAM_MODEL_SECONDARY`
 - `YORDAM_REWRITE_MODEL`
+- `YORDAM_REWRITE_MODEL_SECONDARY`
 - `YORDAM_AI_LOG_PATH`
+
+If the primary model fails, the secondary model is tried.
+Ensure models are available in Ollama, for example:
+
+```bash
+ollama pull deepseek-r1:8b
+ollama pull gpt-oss:20b
+```
 
 ## Troubleshooting
 

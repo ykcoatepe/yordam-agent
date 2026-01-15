@@ -14,20 +14,65 @@ class OllamaClient:
         base_url: str,
         log_path: Optional[Path] = None,
         *,
+        fallback_model: Optional[str] = None,
         log_include_response: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.log_path = log_path
+        self.fallback_model = fallback_model
         self.log_include_response = log_include_response
 
     def generate(
         self,
         *,
         model: str,
+        fallback_model: Optional[str] = None,
         prompt: str,
         system: Optional[str] = None,
         temperature: Optional[float] = None,
+        timeout: Optional[float] = None,
         log_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        fallback = fallback_model or self.fallback_model
+        if fallback == model:
+            fallback = None
+        try:
+            return self._generate_once(
+                model=model,
+                prompt=prompt,
+                system=system,
+                temperature=temperature,
+                timeout=timeout,
+                log_context=log_context,
+            )
+        except RuntimeError as exc:
+            if not fallback:
+                raise
+            try:
+                return self._generate_once(
+                    model=fallback,
+                    prompt=prompt,
+                    system=system,
+                    temperature=temperature,
+                    timeout=timeout,
+                    log_context=log_context,
+                )
+            except RuntimeError as fallback_exc:
+                message = (
+                    f"Ollama failed for model '{model}' and fallback '{fallback}': "
+                    f"{exc}; {fallback_exc}"
+                )
+                raise RuntimeError(message) from fallback_exc
+
+    def _generate_once(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        system: Optional[str],
+        temperature: Optional[float],
+        timeout: Optional[float],
+        log_context: Optional[Dict[str, Any]],
     ) -> str:
         payload: Dict[str, Any] = {
             "model": model,
@@ -48,8 +93,9 @@ class OllamaClient:
         start = time.perf_counter()
         response_text = ""
         error_type: Optional[str] = None
+        request_timeout = 120 if timeout is None else timeout
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=request_timeout) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.URLError as exc:
             error_type = type(exc).__name__
