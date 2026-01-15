@@ -531,25 +531,24 @@ def _classify_by_person(
 
 def _classify_with_context(
     meta: FileMeta, client: OllamaClient, model: str, context: str
-) -> Tuple[Optional[str], Optional[str]]:
+) -> Tuple[str, Optional[str]]:
     system = (
         "You are a careful file organization assistant. "
-        "Use the user's intent to decide whether a file should be moved. "
-        "Only move files that clearly match the user's instruction. "
-        "If unsure, do not move the file."
+        "Use the user's intent to choose a category and optional subcategory. "
+        "Use short Title Case names without slashes. "
+        "Prefer stable categories."
     )
     prompt = (
         f"User intent: {context}\n\n"
-        "Given this file metadata, decide whether to move this file and where.\n"
+        "Given this file metadata, choose a category and optional subcategory.\n"
         f"File name: {meta.name}\n"
         f"Extension: {meta.extension or 'none'}\n"
         f"Type group: {meta.type_group}\n"
         f"Size bytes: {meta.size_bytes}\n"
         f"Modified: {meta.modified_iso}\n"
         f"Snippet: {meta.snippet[:800]}\n\n"
-        "Return ONLY JSON: "
-        "{\"move\": true|false, \"category\": \"...\", \"subcategory\": \"...\"}. "
-        "If move is false, set category and subcategory to null."
+        "Return ONLY JSON: {\"category\": \"...\", \"subcategory\": \"...\"}. "
+        "If subcategory is not needed, use null."
     )
     raw = client.generate(
         model=model,
@@ -564,26 +563,15 @@ def _classify_with_context(
     )
     parsed = extract_json_object(raw)
     if not parsed:
-        return None, None
-    move_value = parsed.get("move")
-    if not isinstance(move_value, bool):
-        return None, None
-    if not move_value:
-        return None, None
-    category = parsed.get("category")
-    if category is None:
-        return None, None
-    if isinstance(category, str):
-        category = category.strip()
-    else:
-        category = None
+        return _fallback_category(meta.type_group)
+    category = str(parsed.get("category", "")).strip()
     subcategory = parsed.get("subcategory")
     if isinstance(subcategory, str):
         subcategory = subcategory.strip()
     else:
         subcategory = None
     if not category:
-        return None, None
+        return _fallback_category(meta.type_group)
     return category, subcategory
 
 
@@ -593,18 +581,16 @@ def classify_file(
     model: str,
     policy: Dict[str, object],
     context: Optional[str] = None,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> Tuple[str, Optional[str]]:
+    override = apply_policy(meta, policy)
+    if override:
+        return override
     if context and _context_mentions_person(context):
         category, subcategory = _classify_by_person(meta, client, model)
         return category, sanitize_folder_name(subcategory) if subcategory else None
     if context:
         category, subcategory = _classify_with_context(meta, client, model, context)
-        if not category:
-            return None, None
         return category, sanitize_folder_name(subcategory) if subcategory else None
-    override = apply_policy(meta, policy)
-    if override:
-        return override
     system = (
         "You are a careful file organization assistant. "
         "Choose a stable category and optional subcategory for a file. "
@@ -720,8 +706,6 @@ def plan_reorg(
         category, subcategory = classify_file(
             meta, client=client, model=model, policy=policy, context=context
         )
-        if not category:
-            continue
         category = sanitize_folder_name(category)
         subcategory = sanitize_folder_name(subcategory) if subcategory else None
         dest_dir = root / category
