@@ -1,6 +1,6 @@
 {
   "root": "~/Documents",
-  "report_path": "~/Documents/00_organization_report.csv",
+  "report_path": "~/Library/Logs/yordam-agent/00_organization_report.csv",
   "min_age_seconds": 10,
   "category_dirs": [
     "Archive",
@@ -303,7 +303,7 @@
   "ai_model_secondary": "gpt-oss:20b",
   "ai_max_chars": 20000,
   "ai_timeout_seconds": 120,
-  "ai_log_path": "~/Documents/Logs.nosync/organizer.ai.log",
+  "ai_log_path": "~/Library/Logs/yordam-agent/organizer.ai.log",
   "ai_context": "",
   "ai_backend": "http"
 }

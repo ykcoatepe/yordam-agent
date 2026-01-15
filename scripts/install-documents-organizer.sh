@@ -6,7 +6,7 @@ PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST_PATH="$PLIST_DIR/$LABEL.plist"
 BIN_PATH="$HOME/bin/yordam-agent"
 ROOT_PATH="$HOME/Documents"
-LOG_DIR="$HOME/Documents/Logs.nosync"
+LOG_DIR="$HOME/Library/Logs/yordam-agent"
 OUT_LOG="$LOG_DIR/organizer.log"
 ERR_LOG="$LOG_DIR/organizer.error.log"
 

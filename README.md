@@ -131,8 +131,8 @@ Install the LaunchAgent watcher (triggers on new files in `~/Documents`):
 Logs are written to:
 
 ```
-~/Documents/Logs.nosync/organizer.log
-~/Documents/Logs.nosync/organizer.error.log
+~/Library/Logs/yordam-agent/organizer.log
+~/Library/Logs/yordam-agent/organizer.error.log
 ```
 
 You can add extra AI steering with `ai_context` in the documents config file.

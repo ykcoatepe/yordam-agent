@@ -643,6 +643,7 @@ def main() -> int:
 
     ensure_dir(cache_path.parent)
     ensure_dir(lock_path.parent)
+    ensure_dir(report_path.parent)
 
     with lock_path.open("w") as lock_handle:
         try:
@@ -708,8 +709,7 @@ def main() -> int:
                     note = ""
                     if ai_destination.name.casefold() != rule_destination.name.casefold():
                         note = (
-                            f"ai_override: rules={rule_destination.name} "
-                            f"ai={ai_destination.name}"
+                            f"ai_override: rules={rule_destination.name} ai={ai_destination.name}"
                         )
                     reason = format_reason(ai_reason, note)
                 else:
@@ -717,10 +717,7 @@ def main() -> int:
                     reason = rule_reason
 
             if destination_dir.exists() and not destination_dir.is_dir():
-                log(
-                    f"Skipping move for {entry.name}: destination {destination_dir} "
-                    "is a file."
-                )
+                log(f"Skipping move for {entry.name}: destination {destination_dir} is a file.")
                 continue
             destination_dir.mkdir(parents=True, exist_ok=True)
             destination_path = resolve_collision(destination_dir / entry.name)
