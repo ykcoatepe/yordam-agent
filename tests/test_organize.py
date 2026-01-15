@@ -11,6 +11,7 @@ from yordam_agent.organize import (  # noqa: E402
     _extract_person_from_text,
     apply_policy,
     gather_files,
+    plan_reorg,
     resolve_reorg_selection,
 )
 
@@ -116,6 +117,76 @@ class OrganizeTests(unittest.TestCase):
         person = _extract_person_from_text(text)
         self.assertEqual(person, "Cahit Senol Kocatepe")
 
+    def test_plan_reorg_skips_when_category_null(self) -> None:
+        class DummyClient:
+            def __init__(self, responses: list[str]) -> None:
+                self._responses = responses
+                self._index = 0
+
+            def generate(self, **kwargs: object) -> str:
+                response = self._responses[self._index]
+                self._index += 1
+                return response
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            screenshot = root / "Screenshot 01.png"
+            other = root / "notes.txt"
+            screenshot.write_text("img", encoding="utf-8")
+            other.write_text("notes", encoding="utf-8")
+            client = DummyClient(
+                [
+                    '{"move": true, "category": "Screenshots", "subcategory": null}',
+                    '{"move": false, "category": null, "subcategory": null}',
+                ]
+            )
+            moves = plan_reorg(
+                root,
+                recursive=False,
+                include_hidden=True,
+                max_files=0,
+                max_snippet_chars=200,
+                client=client,
+                model="test",
+                policy={},
+                files=[screenshot, other],
+                context="Move screenshots to a Screenshots folder and do not touch the rest.",
+                ocr_mode="off",
+            )
+            self.assertEqual(len(moves), 1)
+            self.assertEqual(moves[0].src, screenshot)
+            self.assertEqual(moves[0].dst.parent.name, "Screenshots")
+
+    def test_context_ignores_policy_overrides(self) -> None:
+        class DummyClient:
+            def __init__(self, response: str) -> None:
+                self._response = response
+
+            def generate(self, **kwargs: object) -> str:
+                return self._response
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            receipt = root / "receipt.pdf"
+            receipt.write_text("data", encoding="utf-8")
+            client = DummyClient(
+                '{"move": true, "category": "Taxes", "subcategory": null}'
+            )
+            moves = plan_reorg(
+                root,
+                recursive=False,
+                include_hidden=True,
+                max_files=0,
+                max_snippet_chars=200,
+                client=client,
+                model="test",
+                policy={"extension_overrides": {".pdf": "Finance"}},
+                files=[receipt],
+                context="Move receipts to Taxes and do not touch the rest.",
+                ocr_mode="off",
+            )
+            self.assertEqual(len(moves), 1)
+            self.assertEqual(moves[0].dst.parent.name, "Taxes")
 
 if __name__ == "__main__":
     unittest.main()
