@@ -157,6 +157,37 @@ class OrganizeTests(unittest.TestCase):
             self.assertEqual(moves[0].src, screenshot)
             self.assertEqual(moves[0].dst.parent.name, "Screenshots")
 
+    def test_context_accepts_legacy_payload(self) -> None:
+        class DummyClient:
+            def __init__(self, response: str) -> None:
+                self._response = response
+
+            def generate(self, **kwargs: object) -> str:
+                return self._response
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            screenshot = root / "Screenshot 01.png"
+            screenshot.write_text("img", encoding="utf-8")
+            client = DummyClient(
+                '{"category": "Screenshots", "subcategory": null}'
+            )
+            moves = plan_reorg(
+                root,
+                recursive=False,
+                include_hidden=True,
+                max_files=0,
+                max_snippet_chars=200,
+                client=client,
+                model="test",
+                policy={},
+                files=[screenshot],
+                context="Move screenshots to a Screenshots folder and do not touch the rest.",
+                ocr_mode="off",
+            )
+            self.assertEqual(len(moves), 1)
+            self.assertEqual(moves[0].dst.parent.name, "Screenshots")
+
     def test_context_ignores_policy_overrides(self) -> None:
         class DummyClient:
             def __init__(self, response: str) -> None:

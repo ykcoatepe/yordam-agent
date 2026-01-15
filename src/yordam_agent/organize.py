@@ -566,6 +566,10 @@ def _classify_with_context(
     if not parsed:
         return None, None
     move_value = parsed.get("move")
+    if move_value is None:
+        if parsed.get("category") is None:
+            return None, None
+        move_value = True
     if not isinstance(move_value, bool):
         return None, None
     if not move_value:
