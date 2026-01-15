@@ -24,7 +24,7 @@ fi
 cat > "$BIN_DIR/yordam-agent" <<EOW
 #!/bin/sh
 export PYTHONPATH="$ROOT_DIR/src"
-exec "$PYTHON_BIN" -m yordam_agent.cli "\$@"
+exec /usr/bin/env python3 -m yordam_agent.cli "\$@"
 EOW
 
 chmod +x "$BIN_DIR/yordam-agent"
