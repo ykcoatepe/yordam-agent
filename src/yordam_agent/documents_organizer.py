@@ -23,7 +23,7 @@ from .documents_config import (
 from .ollama import OllamaClient
 from .util import ensure_dir
 
-AI_MODEL_DEFAULT = "deepseek-r1:8b"
+AI_MODEL_DEFAULT = "gpt-oss:20b"
 AI_MAX_CHARS_DEFAULT = 20000
 AI_TIMEOUT_SECONDS_DEFAULT = 90
 ANSI_ESCAPE_RE = re.compile("\x1b\\[[0-9;?]*[A-Za-z]")
@@ -188,7 +188,11 @@ def ai_generate(prompt: str, config: dict) -> tuple[str, str]:
     base_url = config.get("ollama_base_url")
     if not base_url:
         return "", "AI fallback skipped: ollama base URL not configured."
-    client = OllamaClient(base_url, fallback_model=model_secondary)
+    client = OllamaClient(
+        base_url,
+        fallback_model=model_secondary,
+        gpt_oss_think_level=config.get("gpt_oss_think_level"),
+    )
     try:
         response = client.generate(model=model, prompt=prompt, timeout=timeout)
     except RuntimeError as exc:
@@ -619,12 +623,207 @@ def _resolve_ai_log_path(config: dict, root: Path) -> Optional[Path]:
     return _resolve_path(str(path_value), root)
 
 
+def _list_ollama_models() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["ollama", "list"], check=False, capture_output=True, text=True
+        )
+    except OSError:
+        return []
+    if result.returncode != 0:
+        return []
+    models: list[str] = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.lower().startswith("name"):
+            continue
+        name = stripped.split()[0]
+        if name and name not in models:
+            models.append(name)
+    return models
+
+
+def _merge_model_choices(
+    config_models: Optional[list[str]],
+    detected_models: list[str],
+) -> list[str]:
+    merged: list[str] = []
+    if config_models:
+        for item in config_models:
+            if not isinstance(item, str):
+                continue
+            value = item.strip()
+            if value and value not in merged:
+                merged.append(value)
+    for item in detected_models:
+        if item and item not in merged:
+            merged.append(item)
+    return merged
+
+
+def _normalize_model_list(items: Optional[list[str]]) -> list[str]:
+    normalized: list[str] = []
+    if not items:
+        return normalized
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        value = item.strip().lower()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _supports_reasoning_levels(model: str, config: dict) -> bool:
+    normalized = _normalize_model_list(config.get("reasoning_level_models"))
+    if normalized:
+        return model.strip().lower() in normalized
+    lowered = model.strip().lower()
+    if not lowered:
+        return False
+    if "instruct" in lowered:
+        return False
+    return lowered.startswith("gpt-oss")
+
+
+def _prompt_model_text(default_model: str) -> Optional[str]:
+    prompt = f"Model (default {default_model}):"
+    safe_prompt = prompt.replace("\"", "\\\"")
+    safe_default = default_model.replace("\"", "")
+    script = (
+        "set theText to text returned of (display dialog "
+        f"\"{safe_prompt}\" "
+        f"default answer \"{safe_default}\" "
+        "with title \"Yordam Agent\" "
+        "buttons {\"Cancel\", \"OK\"} "
+        "default button \"OK\")\n"
+        "return theText"
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script], check=False, capture_output=True, text=True
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _prompt_model(
+    default_model: str, available_models: Optional[list[str]]
+) -> Optional[tuple[str, bool]]:
+    detected = _list_ollama_models()
+    models = _merge_model_choices(available_models, detected)
+    if models:
+        choices = list(models)
+        if default_model not in choices:
+            choices.insert(0, default_model)
+        choices.append("Other...")
+        escaped_choices = [choice.replace("\"", "\\\"") for choice in choices]
+        list_items = ", ".join([f"\"{choice}\"" for choice in escaped_choices])
+        safe_prompt = "Select model".replace("\"", "\\\"")
+        escaped_default = default_model.replace("\"", "\\\"")
+        default_item = f"{{\"{escaped_default}\"}}" if default_model in choices else "{}"
+        script = (
+            f"set choices to {{{list_items}}}\n"
+            "set theChoice to choose from list choices "
+            f"with prompt \"{safe_prompt}\" "
+            f"default items {default_item}\n"
+            "if theChoice is false then return \"\"\n"
+            "return item 1 of theChoice"
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return None
+        if result.returncode != 0:
+            return None
+        choice = result.stdout.strip()
+        if not choice:
+            return None
+        if choice == "Other...":
+            typed = _prompt_model_text(default_model)
+            if typed is None:
+                return None
+            value = typed or default_model
+            return value, True
+        return choice, True
+
+    typed = _prompt_model_text(default_model)
+    if typed is None:
+        return None
+    value = typed or default_model
+    return value, True
+
+
+def _prompt_think_level(default_level: str) -> Optional[str]:
+    valid_levels = {"low", "medium", "high", "off"}
+    if default_level not in valid_levels:
+        default_level = "low"
+    prompt = "GPT-OSS thinking level:"
+    safe_prompt = prompt.replace("\"", "\\\"")
+    script = (
+        "set choices to {\"low\", \"medium\", \"high\", \"off\"}\n"
+        "set theChoice to choose from list choices "
+        f"with prompt \"{safe_prompt}\" "
+        f"default items {{\"{default_level}\"}}\n"
+        "if theChoice is false then return \"\"\n"
+        "return item 1 of theChoice"
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script], check=False, capture_output=True, text=True
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    if not value:
+        return None
+    return value
+
+
+def _resolve_model_and_think(config: dict) -> tuple[str, Optional[str]]:
+    default_model = str(config.get("ai_model") or AI_MODEL_DEFAULT)
+    prompted = _prompt_model(default_model, config.get("available_models"))
+    answered_model = False
+    if prompted is None:
+        model = default_model
+    else:
+        model, answered_model = prompted
+    think_level = config.get("gpt_oss_think_level")
+    if isinstance(think_level, str):
+        think_level = think_level.strip()
+    else:
+        think_level = None
+    if _supports_reasoning_levels(model, config) and answered_model:
+        default_level = think_level or "low"
+        prompted_level = _prompt_think_level(default_level)
+        if prompted_level is not None:
+            think_level = prompted_level
+    return model, think_level
+
+
 def main() -> int:
     log(
         "Organizer start. If you see 'Operation not permitted', grant Full Disk Access to "
         f"{sys.executable}."
     )
     config = load_documents_config()
+    model, think_level = _resolve_model_and_think(config)
+    config = dict(config)
+    config["ai_model"] = model
+    if think_level is not None:
+        config["gpt_oss_think_level"] = think_level
     config_path = documents_config_path()
     root = Path(config["root"]).expanduser()
     min_age = int(config.get("min_age_seconds", 0))

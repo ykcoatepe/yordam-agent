@@ -242,9 +242,12 @@ the input file's folder (or current working directory when using stdin/clipboard
 ## Configuration keys
 
 - `ollama_base_url` (default `http://localhost:11434`)
-- `model` (default `deepseek-r1:8b`)
+- `model` (default `gpt-oss:20b`)
 - `model_secondary` (default `gpt-oss:20b`)
-- `rewrite_model` (default `deepseek-r1:8b`)
+- `gpt_oss_think_level` (default `low`, accepts `low|medium|high|off`)
+- `available_models` (default list, used for chooser prompts)
+- `reasoning_level_models` (default list, enables think-level prompt)
+- `rewrite_model` (default `gpt-oss:20b`)
 - `rewrite_model_secondary` (default `gpt-oss:20b`)
 - `max_snippet_chars` (default 4000)
 - `max_files` (default 200)
@@ -254,12 +257,24 @@ the input file's folder (or current working directory when using stdin/clipboard
 - `ai_log_include_response` (default `false`)
 - `ocr_enabled` (default `false`)
 - `ocr_prompt` (default `true`)
+- `coworker_allowed_paths` (default `[]`)
+- `coworker_require_approval` (default `true`)
+- `coworker_max_read_bytes` (default `200000`)
+- `coworker_max_write_bytes` (default `200000`)
+- `coworker_web_enabled` (default `false`)
+- `coworker_web_allowlist` (default `[]`)
+- `coworker_web_max_bytes` (default `200000`)
+- `coworker_web_max_query_chars` (default `256`)
+- `coworker_checkpoint_every_writes` (default `5`, set `0` to disable)
+- `coworker_ocr_enabled` (default `false`)
+- `coworker_ocr_prompt` (default `true`)
 
 Override any value via env vars:
 
 - `YORDAM_OLLAMA_BASE_URL`
 - `YORDAM_MODEL`
 - `YORDAM_MODEL_SECONDARY`
+- `YORDAM_GPT_OSS_THINK_LEVEL`
 - `YORDAM_REWRITE_MODEL`
 - `YORDAM_REWRITE_MODEL_SECONDARY`
 - `YORDAM_AI_LOG_PATH`
@@ -271,6 +286,229 @@ Ensure models are available in Ollama, for example:
 ollama pull deepseek-r1:8b
 ollama pull gpt-oss:20b
 ```
+
+## Coworker (experimental)
+
+Coworker mode generates and applies explicit plans with approval tokens.
+Web access (if enabled) is GET-only, requires a per-task allowlist, and rejects extra fields or local data.
+Checkpointed plans can pause mid-execution and write a resume state file for the next segment.
+
+### Coworker specs (v1)
+
+Tool surface (allowlisted primitives):
+
+- `fs.read_text`
+- `fs.list_dir`
+- `fs.propose_write_file`
+- `fs.apply_write_file`
+- `fs.move`
+- `fs.rename`
+- `doc.extract_pdf_text`
+- `web.fetch`
+
+Policy rules (deny-by-default):
+
+- Paths must resolve under allowed roots (`coworker_allowed_paths` + selected paths).
+- Read/write sizes are capped by config (`coworker_max_read_bytes`, `coworker_max_write_bytes`).
+- Writes require approvals and cannot overwrite existing files in v1.
+- `web.fetch` is GET-only, requires a per-task allowlist, blocks body/payload fields, and
+  requires `allow_query: true` for URLs with query strings. Query length is capped by
+  `coworker_web_max_query_chars`.
+
+Plan schema (JSON):
+
+- `version` (int, required)
+- `created_at` (UTC timestamp string, required)
+- `instruction` (string, optional)
+- `tool_calls` (list of `{id, tool, args}`, required)
+- `checkpoints` (list of tool call ids, optional)
+- `model` (string, optional)
+- `gpt_oss_think_level` (string, optional)
+- `plan_hash` (string, required for approvals)
+
+Example:
+
+```json
+{
+  "version": 1,
+  "created_at": "20250115T120000Z",
+  "instruction": "summarize selected documents",
+  "tool_calls": [
+    {"id": "1", "tool": "fs.propose_write_file", "args": {"path": "/tmp/a.md", "content": "..." }},
+    {"id": "2", "tool": "fs.apply_write_file", "args": {"path": "/tmp/a.md", "content": "..." }}
+  ],
+  "checkpoints": ["2"],
+  "plan_hash": "sha256:..."
+}
+```
+
+Generate a plan from an instruction:
+
+```bash
+yordam-agent coworker plan --instruction "summarize these PDFs" --paths /path/to/file1.pdf /path/to/file2.pdf
+```
+
+Preview a plan (with diffs when available):
+
+```bash
+yordam-agent coworker preview --plan /path/to/coworker-plan.json --paths /path/to/file1.pdf --include-diffs
+```
+
+Approve and apply:
+
+```bash
+yordam-agent coworker approve --plan /path/to/coworker-plan.json
+yordam-agent coworker apply --plan /path/to/coworker-plan.json --approval-file /path/to/coworker-plan.approval.json --paths /path/to/file1.pdf
+```
+
+Generate a summary plan (writes summaries next to the files):
+
+```bash
+yordam-agent coworker summarize --paths /path/to/file.pdf
+```
+
+Generate outline/report plans (writes next to the files):
+
+```bash
+yordam-agent coworker summarize --paths /path/to/file.pdf --task outline
+yordam-agent coworker summarize --paths /path/to/file.pdf --task report
+```
+
+### Coworker demo (end-to-end)
+
+```bash
+# 1) Create a plan (LLM-driven)
+yordam-agent coworker plan --instruction "summarize these files" --paths /path/to/file1.pdf /path/to/file2.pdf
+
+# 2) Preview the plan
+yordam-agent coworker preview --plan /path/to/coworker-plan.json --paths /path/to/file1.pdf /path/to/file2.pdf --include-diffs
+
+# 3) Approve the plan (generates approval token)
+yordam-agent coworker approve --plan /path/to/coworker-plan.json
+
+# 4) Apply the plan (requires matching approval)
+yordam-agent coworker apply --plan /path/to/coworker-plan.json --approval-file /path/to/coworker-plan.approval.json --paths /path/to/file1.pdf /path/to/file2.pdf
+```
+
+List checkpoints for a plan:
+
+```bash
+yordam-agent coworker checkpoints --plan /path/to/coworker-plan.json
+```
+
+Checkpoint apply (requires a checkpoint id from the plan, writes resume state):
+
+```bash
+# Approve the next checkpoint (use the id listed in plan.checkpoints)
+yordam-agent coworker approve --plan /path/to/coworker-plan.json --checkpoint-id <checkpoint-id>
+
+# Apply until checkpoint and write state
+yordam-agent coworker apply --plan /path/to/coworker-plan.json --approval-file /path/to/coworker-plan.approval.json --checkpoint
+
+# Resume next checkpoint (use the generated .state.json)
+yordam-agent coworker apply --plan /path/to/coworker-plan.json --approval-file /path/to/coworker-plan.approval.json --checkpoint --resume-state /path/to/coworker-plan.state.json
+```
+
+### Coworker runbooks
+
+- Policy denial: run `yordam-agent coworker preview --plan ... --paths ...` to see which call fails,
+  then adjust paths/allowlist/config and regenerate the plan.
+- Plan hash mismatch: re-run `coworker approve` after regenerating the plan; approvals are bound to
+  the current plan hash.
+- OCR fallback: set `coworker_ocr_enabled=true` to force OCR, or keep `coworker_ocr_prompt=true` to
+  prompt only when text extraction fails.
+- Web blocked: ensure `coworker_web_enabled=true`, add domains to `coworker_web_allowlist`, and include
+  a per-task allowlist in the plan; add `allow_query: true` for query URLs.
+- Checkpoint resume: use `coworker checkpoints` to list IDs, approve the next checkpoint, then resume
+  with `--resume-state` until completion.
+
+Example plans:
+
+Document task (outline):
+
+```json
+{
+  "version": 1,
+  "created_at": "20250115T120000Z",
+  "instruction": "outline selected documents",
+  "tool_calls": [
+    {
+      "id": "doc-outline-propose",
+      "tool": "fs.propose_write_file",
+      "args": {
+        "path": "/path/to/report.outline.md",
+        "content": "# Outline: report.pdf\n\n- Section 1\n- Section 2\n"
+      }
+    },
+    {
+      "id": "doc-outline-apply",
+      "tool": "fs.apply_write_file",
+      "args": {
+        "path": "/path/to/report.outline.md",
+        "content": "# Outline: report.pdf\n\n- Section 1\n- Section 2\n"
+      }
+    }
+  ],
+  "plan_hash": "sha256:..."
+}
+```
+
+Web fetch with query allowlist:
+
+```json
+{
+  "version": 1,
+  "created_at": "20250115T120000Z",
+  "instruction": "fetch release notes",
+  "tool_calls": [
+    {
+      "id": "web-1",
+      "tool": "web.fetch",
+      "args": {
+        "url": "https://example.com/search?q=release+notes",
+        "allowlist": ["example.com"],
+        "allow_query": true,
+        "max_bytes": 20000
+      }
+    }
+  ],
+  "plan_hash": "sha256:..."
+}
+```
+
+## Testing & Quality
+
+Unit tests:
+
+```bash
+ruff check .
+pytest
+```
+
+Integration tests (local):
+
+- `tests/test_coworker_executor.py` covers approval enforcement, hash mismatches, and checkpoints.
+- `tests/test_coworker_policy.py` covers allowlist, deny-by-default rules, and web guards.
+
+E2E (manual) Quick Action:
+
+1) Install Quick Actions: `./quickactions/install.sh`
+2) Right-click a couple of files in Finder -> `Yordam - Doc Task`
+3) Choose `summary`, approve, and verify `*.summary.md` appears next to the files.
+
+Test data & environments:
+
+- `tests/fixtures/prompt_injection.txt` for prompt-injection regressions.
+- `tests/fixtures/sample.txt` for summarize/outline/report smoke tests.
+
+Performance sanity:
+
+- Run on 50+ files and inspect plan/apply times; keep logs in `.yordam-agent/`.
+
+Security testing:
+
+- Ensure prompt-injection fixtures do not bypass allowlisted tools (policy should block).
+- Verify approval mismatch fails closed (`tests/test_coworker_executor.py`).
 
 ## Troubleshooting
 

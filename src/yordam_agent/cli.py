@@ -1,13 +1,27 @@
 import argparse
+import json
 import os
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from .ai_log import resolve_log_path
 from .config import config_path, load_config
+from .coworker.approval import build_approval, load_approval, write_approval
+from .coworker.executor import (
+    ApprovalError,
+    PlanValidationError,
+    apply_plan_with_state,
+    preview_plan,
+)
+from .coworker.plan import ensure_plan_hash, load_plan, write_plan
+from .coworker.planner import build_manual_plan, plan_from_instruction
+from .coworker.policy import policy_from_config
+from .coworker.registry import DEFAULT_REGISTRY
+from .coworker.run_state import load_state, write_state
+from .coworker.summarize import build_summary_plan
 from .documents_organizer import main as documents_main
 from .ollama import OllamaClient
 from .organize import (
@@ -262,6 +276,13 @@ def cmd_reorg(args: argparse.Namespace) -> int:
         print(f"Parent folder not found: {root}")
         return 1
     cfg = load_config()
+    model, think_level = _resolve_model_and_think(
+        args.model,
+        cfg.get("model"),
+        cfg.get("gpt_oss_think_level"),
+        cfg.get("available_models"),
+        cfg.get("reasoning_level_models"),
+    )
     log_path = resolve_log_path(cfg.get("ai_log_path"), root)
     model_secondary = cfg.get("model_secondary")
     if isinstance(model_secondary, str):
@@ -270,9 +291,9 @@ def cmd_reorg(args: argparse.Namespace) -> int:
         cfg["ollama_base_url"],
         log_path=log_path,
         fallback_model=model_secondary,
+        gpt_oss_think_level=think_level,
         log_include_response=bool(cfg.get("ai_log_include_response")),
     )
-    model = args.model or cfg["model"]
     max_snippet_chars = args.max_snippet_chars or cfg["max_snippet_chars"]
     max_files = args.max_files if args.max_files is not None else cfg["max_files"]
     policy_path = Path(args.policy or cfg["policy_path"]).expanduser()
@@ -398,6 +419,209 @@ def _prompt_instruction() -> Optional[str]:
     return value or None
 
 
+def _list_ollama_models() -> List[str]:
+    try:
+        result = subprocess.run(
+            ["ollama", "list"], check=False, capture_output=True, text=True
+        )
+    except OSError:
+        return []
+    if result.returncode != 0:
+        return []
+    models: List[str] = []
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.lower().startswith("name"):
+            continue
+        name = stripped.split()[0]
+        if name and name not in models:
+            models.append(name)
+    return models
+
+
+def _merge_model_choices(
+    config_models: Optional[Iterable[str]],
+    detected_models: List[str],
+) -> List[str]:
+    merged: List[str] = []
+    if config_models:
+        for item in config_models:
+            if not isinstance(item, str):
+                continue
+            value = item.strip()
+            if value and value not in merged:
+                merged.append(value)
+    for item in detected_models:
+        if item and item not in merged:
+            merged.append(item)
+    return merged
+
+
+def _normalize_model_list(items: Optional[Iterable[str]]) -> List[str]:
+    normalized: List[str] = []
+    if not items:
+        return normalized
+    for item in items:
+        if not isinstance(item, str):
+            continue
+        value = item.strip().lower()
+        if value and value not in normalized:
+            normalized.append(value)
+    return normalized
+
+
+def _supports_reasoning_levels(
+    model: str, reasoning_level_models: Optional[Iterable[str]]
+) -> bool:
+    normalized = _normalize_model_list(reasoning_level_models)
+    if normalized:
+        return model.strip().lower() in normalized
+    lowered = model.strip().lower()
+    if not lowered:
+        return False
+    if "instruct" in lowered:
+        return False
+    return lowered.startswith("gpt-oss")
+
+
+def _prompt_model_text(default_model: str) -> Optional[str]:
+    prompt = f"Model (default {default_model}):"
+    safe_prompt = prompt.replace("\"", "\\\"")
+    safe_default = default_model.replace("\"", "")
+    script = (
+        "set theText to text returned of (display dialog "
+        f"\"{safe_prompt}\" "
+        f"default answer \"{safe_default}\" "
+        "with title \"Yordam Agent\" "
+        "buttons {\"Cancel\", \"OK\"} "
+        "default button \"OK\")\n"
+        "return theText"
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script], check=False, capture_output=True, text=True
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _prompt_model(
+    default_model: str, available_models: Optional[Iterable[str]]
+) -> Optional[tuple[str, bool]]:
+    detected = _list_ollama_models()
+    models = _merge_model_choices(available_models, detected)
+    if models:
+        choices = list(models)
+        if default_model not in choices:
+            choices.insert(0, default_model)
+        choices.append("Other...")
+        escaped_choices = [choice.replace("\"", "\\\"") for choice in choices]
+        list_items = ", ".join([f"\"{choice}\"" for choice in escaped_choices])
+        safe_prompt = "Select model".replace("\"", "\\\"")
+        escaped_default = default_model.replace("\"", "\\\"")
+        default_item = f"{{\"{escaped_default}\"}}" if default_model in choices else "{}"
+        script = (
+            f"set choices to {{{list_items}}}\n"
+            "set theChoice to choose from list choices "
+            f"with prompt \"{safe_prompt}\" "
+            f"default items {default_item}\n"
+            "if theChoice is false then return \"\"\n"
+            "return item 1 of theChoice"
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError:
+            return None
+        if result.returncode != 0:
+            return None
+        choice = result.stdout.strip()
+        if not choice:
+            return None
+        if choice == "Other...":
+            typed = _prompt_model_text(default_model)
+            if typed is None:
+                return None
+            value = typed or default_model
+            return value, True
+        return choice, True
+
+    typed = _prompt_model_text(default_model)
+    if typed is None:
+        return None
+    value = typed or default_model
+    return value, True
+
+
+def _prompt_think_level(default_level: str) -> Optional[str]:
+    valid_levels = {"low", "medium", "high", "off"}
+    if default_level not in valid_levels:
+        default_level = "low"
+    prompt = "GPT-OSS thinking level:"
+    safe_prompt = prompt.replace("\"", "\\\"")
+    script = (
+        "set choices to {\"low\", \"medium\", \"high\", \"off\"}\n"
+        "set theChoice to choose from list choices "
+        f"with prompt \"{safe_prompt}\" "
+        f"default items {{\"{default_level}\"}}\n"
+        "if theChoice is false then return \"\"\n"
+        "return item 1 of theChoice"
+    )
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script], check=False, capture_output=True, text=True
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    if not value:
+        return None
+    return value
+
+
+def _resolve_model_and_think(
+    args_model: Optional[str],
+    cfg_model: Optional[str],
+    cfg_think_level: Optional[str],
+    available_models: Optional[Iterable[str]],
+    reasoning_level_models: Optional[Iterable[str]],
+) -> tuple[str, Optional[str]]:
+    answered_model = False
+    if args_model:
+        model = args_model
+        answered_model = True
+    else:
+        default_model = ""
+        if isinstance(cfg_model, str):
+            default_model = cfg_model.strip()
+        if not default_model:
+            default_model = "gpt-oss:20b"
+        prompted = _prompt_model(default_model, available_models)
+        if prompted is None:
+            model = default_model
+        else:
+            model, answered_model = prompted
+
+    think_level = cfg_think_level if isinstance(cfg_think_level, str) else None
+    if _supports_reasoning_levels(model, reasoning_level_models) and answered_model:
+        default_level = think_level.strip() if isinstance(think_level, str) else "low"
+        prompted_level = _prompt_think_level(default_level)
+        if prompted_level is not None:
+            think_level = prompted_level
+    return model, think_level
+
+
 def cmd_rename(args: argparse.Namespace) -> int:
     raw_paths = [Path(p).expanduser().resolve() for p in args.paths]
     try:
@@ -420,6 +644,13 @@ def cmd_rename(args: argparse.Namespace) -> int:
         return 1
 
     cfg = load_config()
+    model, think_level = _resolve_model_and_think(
+        args.model,
+        cfg.get("model"),
+        cfg.get("gpt_oss_think_level"),
+        cfg.get("available_models"),
+        cfg.get("reasoning_level_models"),
+    )
     log_path = resolve_log_path(cfg.get("ai_log_path"), root)
     model_secondary = cfg.get("model_secondary")
     if isinstance(model_secondary, str):
@@ -428,9 +659,9 @@ def cmd_rename(args: argparse.Namespace) -> int:
         cfg["ollama_base_url"],
         log_path=log_path,
         fallback_model=model_secondary,
+        gpt_oss_think_level=think_level,
         log_include_response=bool(cfg.get("ai_log_include_response")),
     )
-    model = args.model or cfg["model"]
     policy_path = Path(args.policy or cfg["policy_path"]).expanduser()
 
     try:
@@ -551,7 +782,13 @@ def cmd_undo(args: argparse.Namespace) -> int:
 
 def cmd_rewrite(args: argparse.Namespace) -> int:
     cfg = load_config()
-    model = args.model or cfg["rewrite_model"]
+    model, think_level = _resolve_model_and_think(
+        args.model,
+        cfg.get("rewrite_model"),
+        cfg.get("gpt_oss_think_level"),
+        cfg.get("available_models"),
+        cfg.get("reasoning_level_models"),
+    )
     tone = normalize_tone(args.tone)
 
     source = ""
@@ -585,6 +822,7 @@ def cmd_rewrite(args: argparse.Namespace) -> int:
         cfg["ollama_base_url"],
         log_path=log_path,
         fallback_model=model_secondary,
+        gpt_oss_think_level=think_level,
         log_include_response=bool(cfg.get("ai_log_include_response")),
     )
     log_context = {"operation": "rewrite", "source": source}
@@ -646,6 +884,188 @@ def cmd_policy_wizard(args: argparse.Namespace) -> int:
 
 def cmd_documents(_: argparse.Namespace) -> int:
     return documents_main()
+
+
+def _resolve_coworker_paths(paths: List[str]) -> List[Path]:
+    resolved: List[Path] = []
+    for raw in paths:
+        resolved.append(Path(raw).expanduser().resolve())
+    return resolved
+
+
+def _resolve_optional_roots(raw_roots: Optional[List[str]]) -> List[Path]:
+    if not raw_roots:
+        return []
+    resolved: List[Path] = []
+    for raw in raw_roots:
+        resolved.append(Path(raw).expanduser().resolve())
+    return resolved
+
+
+def cmd_coworker_preview(args: argparse.Namespace) -> int:
+    plan_path = Path(args.plan).expanduser()
+    plan = load_plan(plan_path)
+    cfg = load_config()
+    selected_paths = _resolve_coworker_paths(args.paths or [])
+    extra_roots = _resolve_optional_roots(args.allow_root)
+    policy = policy_from_config(cfg, selected_paths, extra_roots)
+    try:
+        lines = preview_plan(
+            plan,
+            policy,
+            DEFAULT_REGISTRY,
+            include_diffs=args.include_diffs,
+        )
+    except PlanValidationError as exc:
+        print(str(exc))
+        return 1
+    print("\n".join(lines))
+    return 0
+
+
+def cmd_coworker_checkpoints(args: argparse.Namespace) -> int:
+    plan_path = Path(args.plan).expanduser()
+    plan = load_plan(plan_path)
+    checkpoints = plan.get("checkpoints", [])
+    if not checkpoints:
+        print("No checkpoints defined.")
+        return 0
+    for checkpoint in checkpoints:
+        print(checkpoint)
+    return 0
+
+
+def cmd_coworker_approve(args: argparse.Namespace) -> int:
+    plan_path = Path(args.plan).expanduser()
+    plan = load_plan(plan_path)
+    plan_hash = ensure_plan_hash(plan)
+    write_plan(plan_path, plan)
+    approval = build_approval(plan_hash, checkpoint_id=args.checkpoint_id)
+    approval_path = (
+        Path(args.approval_file).expanduser()
+        if args.approval_file
+        else plan_path.with_suffix(".approval.json")
+    )
+    write_approval(approval_path, approval)
+    print(f"Approval written: {approval_path}")
+    return 0
+
+
+def cmd_coworker_apply(args: argparse.Namespace) -> int:
+    plan_path = Path(args.plan).expanduser()
+    plan = load_plan(plan_path)
+    cfg = load_config()
+    selected_paths = _resolve_coworker_paths(args.paths or [])
+    extra_roots = _resolve_optional_roots(args.allow_root)
+    policy = policy_from_config(cfg, selected_paths, extra_roots)
+    approval = None
+    if args.approval_file:
+        approval = load_approval(Path(args.approval_file).expanduser())
+    resume_state = None
+    if args.resume_state:
+        resume_state = load_state(Path(args.resume_state).expanduser())
+    try:
+        results, state = apply_plan_with_state(
+            plan,
+            policy,
+            DEFAULT_REGISTRY,
+            approval=approval,
+            resume_state=resume_state,
+            stop_at_checkpoints=args.checkpoint,
+        )
+    except (PlanValidationError, ApprovalError) as exc:
+        print(str(exc))
+        return 1
+    for result in results:
+        print(result)
+    if state:
+        state_path = (
+            Path(args.resume_state).expanduser()
+            if args.resume_state
+            else plan_path.with_suffix(".state.json")
+        )
+        write_state(state_path, state)
+        print(f"Checkpoint reached. Resume state: {state_path}")
+    return 0
+
+
+def cmd_coworker_plan(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    selected_paths = _resolve_coworker_paths(args.paths or [])
+    plan_path = _default_coworker_plan_path(args.out, selected_paths)
+    if args.instruction:
+        model, think_level = _resolve_model_and_think(
+            args.model,
+            cfg.get("model"),
+            cfg.get("gpt_oss_think_level"),
+            cfg.get("available_models"),
+            cfg.get("reasoning_level_models"),
+        )
+        cfg = dict(cfg)
+        if think_level is not None:
+            cfg["gpt_oss_think_level"] = think_level
+        plan = plan_from_instruction(
+            instruction=args.instruction,
+            selected_paths=selected_paths,
+            cfg=cfg,
+            registry=DEFAULT_REGISTRY,
+            model=model,
+            max_snippet_chars=args.max_snippet_chars,
+        )
+    else:
+        if not args.tool or not args.args:
+            print("Manual planning requires --tool and --args.")
+            return 1
+        if len(args.tool) != len(args.args):
+            print("--tool and --args must be provided in pairs.")
+            return 1
+        tool_calls = []
+        for tool_name, raw_args in zip(args.tool, args.args):
+            try:
+                parsed = json.loads(raw_args)
+            except json.JSONDecodeError as exc:
+                print(f"Invalid JSON args for {tool_name}: {exc}")
+                return 1
+            tool_calls.append({"tool": tool_name, "args": parsed})
+        plan = build_manual_plan(tool_calls, instruction=None)
+    ensure_plan_hash(plan)
+    write_plan(plan_path, plan)
+    print(f"Plan written: {plan_path}")
+    return 0
+
+
+def cmd_coworker_summarize(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    paths = _resolve_coworker_paths(args.paths or [])
+    if not paths:
+        print("Provide at least one file to summarize.")
+        return 1
+    for path in paths:
+        if not path.is_file():
+            print(f"Not a file: {path}")
+            return 1
+    model, think_level = _resolve_model_and_think(
+        args.model,
+        cfg.get("model"),
+        cfg.get("gpt_oss_think_level"),
+        cfg.get("available_models"),
+        cfg.get("reasoning_level_models"),
+    )
+    cfg = dict(cfg)
+    if think_level is not None:
+        cfg["gpt_oss_think_level"] = think_level
+    max_chars = args.max_chars or int(cfg.get("coworker_max_read_bytes", 200000))
+    plan = build_summary_plan(
+        paths=paths,
+        cfg=cfg,
+        model=model,
+        max_chars=max_chars,
+        task=args.task,
+    )
+    plan_path = _default_coworker_plan_path(args.out, paths)
+    write_plan(plan_path, plan)
+    print(f"Plan written: {plan_path}")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -740,7 +1160,161 @@ def build_parser() -> argparse.ArgumentParser:
     )
     documents.set_defaults(func=cmd_documents)
 
+    coworker = sub.add_parser("coworker", help="Run coworker plans")
+    coworker_sub = coworker.add_subparsers(dest="coworker_command", required=True)
+
+    coworker_plan = coworker_sub.add_parser("plan", help="Generate a coworker plan")
+    coworker_plan.add_argument("--instruction", type=str, default=None, help="LLM instruction")
+    coworker_plan.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        help="Manual tool name (repeatable)",
+    )
+    coworker_plan.add_argument(
+        "--args",
+        action="append",
+        default=[],
+        help="Manual tool args as JSON (repeatable)",
+    )
+    coworker_plan.add_argument(
+        "--paths",
+        nargs="*",
+        default=[],
+        help="Selected files/folders to scope planning context",
+    )
+    coworker_plan.add_argument(
+        "--allow-root",
+        action="append",
+        default=[],
+        help="Additional allowed root (repeatable)",
+    )
+    coworker_plan.add_argument(
+        "--out",
+        default=None,
+        help="Plan JSON output path",
+    )
+    coworker_plan.add_argument("--model", type=str, default=None, help="Ollama model override")
+    coworker_plan.add_argument(
+        "--max-snippet-chars",
+        type=int,
+        default=800,
+        help="Max chars per text file snippet in planning prompt",
+    )
+    coworker_plan.set_defaults(func=cmd_coworker_plan)
+
+    coworker_sum = coworker_sub.add_parser(
+        "summarize",
+        help="Generate a summary plan for selected documents",
+    )
+    coworker_sum.add_argument(
+        "--paths",
+        nargs="+",
+        required=True,
+        help="Files to summarize",
+    )
+    coworker_sum.add_argument(
+        "--task",
+        choices=["summary", "outline", "report"],
+        default="summary",
+        help="Document task to generate",
+    )
+    coworker_sum.add_argument("--out", default=None, help="Plan JSON output path")
+    coworker_sum.add_argument("--model", type=str, default=None, help="Ollama model override")
+    coworker_sum.add_argument(
+        "--max-chars",
+        type=int,
+        default=None,
+        help="Max chars per file for summary input",
+    )
+    coworker_sum.set_defaults(func=cmd_coworker_summarize)
+
+    coworker_preview = coworker_sub.add_parser("preview", help="Preview a coworker plan")
+    coworker_preview.add_argument("--plan", required=True, help="Plan JSON path")
+    coworker_preview.add_argument(
+        "--paths",
+        nargs="*",
+        default=[],
+        help="Selected files/folders to scope access",
+    )
+    coworker_preview.add_argument(
+        "--allow-root",
+        action="append",
+        default=[],
+        help="Additional allowed root (repeatable)",
+    )
+    coworker_preview.add_argument(
+        "--include-diffs",
+        action="store_true",
+        help="Include diffs for propose_write_file entries",
+    )
+    coworker_preview.set_defaults(func=cmd_coworker_preview)
+
+    coworker_approve = coworker_sub.add_parser("approve", help="Approve a coworker plan")
+    coworker_approve.add_argument("--plan", required=True, help="Plan JSON path")
+    coworker_approve.add_argument(
+        "--approval-file",
+        default=None,
+        help="Approval token output path",
+    )
+    coworker_approve.add_argument(
+        "--checkpoint-id",
+        default=None,
+        help="Checkpoint id to approve (required when applying with checkpoints)",
+    )
+    coworker_approve.set_defaults(func=cmd_coworker_approve)
+
+    coworker_checkpoints = coworker_sub.add_parser(
+        "checkpoints",
+        help="List checkpoint ids for a plan",
+    )
+    coworker_checkpoints.add_argument("--plan", required=True, help="Plan JSON path")
+    coworker_checkpoints.set_defaults(func=cmd_coworker_checkpoints)
+
+    coworker_apply = coworker_sub.add_parser("apply", help="Apply a coworker plan")
+    coworker_apply.add_argument("--plan", required=True, help="Plan JSON path")
+    coworker_apply.add_argument(
+        "--approval-file",
+        default=None,
+        help="Approval token path (required if approvals enabled)",
+    )
+    coworker_apply.add_argument(
+        "--resume-state",
+        default=None,
+        help="Resume state path from a prior checkpoint run",
+    )
+    coworker_apply.add_argument(
+        "--checkpoint",
+        action="store_true",
+        help="Stop at checkpoints and write resume state",
+    )
+    coworker_apply.add_argument(
+        "--paths",
+        nargs="*",
+        default=[],
+        help="Selected files/folders to scope access",
+    )
+    coworker_apply.add_argument(
+        "--allow-root",
+        action="append",
+        default=[],
+        help="Additional allowed root (repeatable)",
+    )
+    coworker_apply.set_defaults(func=cmd_coworker_apply)
+
     return parser
+
+
+def _default_coworker_plan_path(out_path: Optional[str], selected_paths: List[Path]) -> Path:
+    if out_path:
+        return Path(out_path).expanduser()
+    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    if selected_paths:
+        root = selected_paths[0]
+        root = root.parent if root.is_file() else root
+    else:
+        root = Path.cwd()
+    return root / ".yordam-agent" / f"coworker-plan-{timestamp}.json"
 
 
 def main() -> int:
