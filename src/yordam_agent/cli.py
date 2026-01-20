@@ -3,6 +3,8 @@ import json
 import os
 import subprocess
 import sys
+import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -22,6 +24,21 @@ from .coworker.policy import policy_from_config
 from .coworker.registry import DEFAULT_REGISTRY
 from .coworker.run_state import load_state, write_state
 from .coworker.summarize import build_summary_plan
+from .coworker_runtime.daemon import run_once
+from .coworker_runtime.launchd import (
+    DEFAULT_LAUNCHD_LABEL,
+    DEFAULT_STDERR_PATH,
+    DEFAULT_STDOUT_PATH,
+    render_launchd_plist,
+    resolve_program_path,
+)
+from .coworker_runtime.locks import release_task_locks
+from .coworker_runtime.task_bundle import (
+    append_event,
+    ensure_task_bundle,
+    update_task_snapshot,
+)
+from .coworker_runtime.task_store import TaskStore
 from .documents_organizer import main as documents_main
 from .ollama import OllamaClient
 from .organize import (
@@ -902,6 +919,52 @@ def _resolve_optional_roots(raw_roots: Optional[List[str]]) -> List[Path]:
     return resolved
 
 
+def _runtime_state_dir(cfg: Dict[str, object], override: Optional[str]) -> Path:
+    if override:
+        return Path(override).expanduser().resolve()
+    raw = cfg.get("coworker_runtime_state_dir")
+    if raw:
+        return Path(str(raw)).expanduser().resolve()
+    return Path.home() / ".config" / "yordam-agent" / "coworker"
+
+
+def _runtime_store(cfg: Dict[str, object], override: Optional[str]) -> TaskStore:
+    state_dir = _runtime_state_dir(cfg, override)
+    db_path = state_dir / "tasks.db"
+    return TaskStore(db_path)
+
+
+def _runtime_enabled(cfg: Dict[str, object]) -> bool:
+    raw = cfg.get("coworker_runtime_enabled")
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(raw, int):
+        return raw != 0
+    return False
+
+
+def _runtime_workers(cfg: Dict[str, object], override: Optional[int]) -> int:
+    if override is not None:
+        return max(1, int(override))
+    raw = cfg.get("coworker_runtime_workers", 1)
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _require_runtime_enabled(cfg: Dict[str, object]) -> bool:
+    if _runtime_enabled(cfg):
+        return True
+    print(
+        "Coworker runtime is disabled. Set coworker_runtime_enabled=true in config or "
+        "export YORDAM_COWORKER_RUNTIME_ENABLED=1."
+    )
+    return False
+
+
 def cmd_coworker_preview(args: argparse.Namespace) -> int:
     plan_path = Path(args.plan).expanduser()
     plan = load_plan(plan_path)
@@ -986,6 +1049,234 @@ def cmd_coworker_apply(args: argparse.Namespace) -> int:
         )
         write_state(state_path, state)
         print(f"Checkpoint reached. Resume state: {state_path}")
+    return 0
+
+
+def cmd_coworker_runtime_submit(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    if not _require_runtime_enabled(cfg):
+        return 1
+    plan_path = Path(args.plan).expanduser().resolve()
+    plan = load_plan(plan_path)
+    plan_hash = ensure_plan_hash(plan)
+    write_plan(plan_path, plan)
+
+    store = _runtime_store(cfg, args.state_dir)
+    task_id = f"tsk_{uuid.uuid4().hex}"
+    bundle_root = (
+        Path(args.bundle_root).expanduser().resolve()
+        if args.bundle_root
+        else _runtime_state_dir(cfg, args.state_dir) / "bundles" / task_id
+    )
+
+    metadata: Dict[str, object] = {}
+    if args.paths:
+        metadata["selected_paths"] = [str(Path(p).expanduser().resolve()) for p in args.paths]
+    if args.allow_root:
+        metadata["allow_roots"] = [
+            str(Path(p).expanduser().resolve()) for p in args.allow_root
+        ]
+    if args.metadata:
+        try:
+            extra = json.loads(args.metadata)
+        except json.JSONDecodeError as exc:
+            print(f"Invalid metadata JSON: {exc}")
+            return 1
+        if isinstance(extra, dict):
+            metadata.update(extra)
+
+    bundle_paths = ensure_task_bundle(
+        bundle_root,
+        task_id=task_id,
+        plan=plan,
+        metadata=metadata or None,
+    )
+
+    store.create_task(
+        task_id=task_id,
+        plan_hash=plan_hash,
+        plan_path=plan_path,
+        bundle_path=bundle_root,
+        metadata=metadata or None,
+    )
+
+    append_event(
+        bundle_paths,
+        {"task_id": task_id, "event": "task_created", "state": "queued"},
+    )
+    print(f"Task queued: {task_id}")
+    print(f"Bundle: {bundle_root}")
+    return 0
+
+
+def cmd_coworker_runtime_list(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    if not _require_runtime_enabled(cfg):
+        return 1
+    store = _runtime_store(cfg, args.state_dir)
+    tasks = store.list_tasks(state=args.state, limit=100, offset=0)
+    if not tasks:
+        print("No tasks.")
+        return 0
+    for task in tasks:
+        print(f"{task.id} state={task.state} plan={task.plan_path}")
+    return 0
+
+
+def cmd_coworker_runtime_status(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    if not _require_runtime_enabled(cfg):
+        return 1
+    store = _runtime_store(cfg, args.state_dir)
+    tasks = store.list_tasks(state=args.state, limit=200, offset=0)
+    counts: Dict[str, int] = {}
+    for task in tasks:
+        counts[task.state] = counts.get(task.state, 0) + 1
+    if not counts:
+        print("No tasks.")
+        return 0
+    for state, count in sorted(counts.items()):
+        print(f"{state}: {count}")
+    return 0
+
+
+def cmd_coworker_runtime_logs(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    if not _require_runtime_enabled(cfg):
+        return 1
+    store = _runtime_store(cfg, args.state_dir)
+    task = store.get_task(args.task)
+    events_path = Path(task.bundle_path) / "events.jsonl"
+    if not events_path.exists():
+        print("No events yet.")
+        return 0
+    print(events_path.read_text(encoding="utf-8"), end="")
+    return 0
+
+
+def cmd_coworker_runtime_approve(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    if not _require_runtime_enabled(cfg):
+        return 1
+    store = _runtime_store(cfg, args.state_dir)
+    approved_by = args.approved_by or os.environ.get("USER", "unknown")
+    store.record_approval(
+        plan_hash=args.plan_hash,
+        checkpoint_id=args.checkpoint_id,
+        approved_by=approved_by,
+    )
+    print("Approval recorded.")
+    return 0
+
+
+def cmd_coworker_runtime_cancel(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    if not _require_runtime_enabled(cfg):
+        return 1
+    store = _runtime_store(cfg, args.state_dir)
+    task = store.update_task_state(args.task, state="canceled", error="canceled by user")
+    bundle_root = Path(task.bundle_path)
+    selected_paths = task.metadata.get("selected_paths")
+    if selected_paths:
+        locks_dir = store.db_path.parent / "locks"
+        release_task_locks(
+            [Path(p) for p in selected_paths],
+            locks_dir=locks_dir,
+            task_id=task.id,
+        )
+    if bundle_root.exists():
+        bundle_paths = ensure_task_bundle(
+            bundle_root,
+            task_id=task.id,
+            plan=load_plan(Path(task.plan_path)),
+            metadata=task.metadata,
+        )
+        append_event(
+            bundle_paths,
+            {"task_id": task.id, "event": "task_canceled", "state": "canceled"},
+        )
+        update_task_snapshot(
+            bundle_paths,
+            task_id=task.id,
+            plan_hash=task.plan_hash,
+            state="canceled",
+            metadata=task.metadata,
+            error="canceled by user",
+        )
+    print(f"Task canceled: {task.id}")
+    return 0
+
+
+def cmd_coworker_runtime_daemon(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    if not _require_runtime_enabled(cfg):
+        return 1
+    store = _runtime_store(cfg, args.state_dir)
+    worker_base = args.worker_id or f"worker-{os.getpid()}"
+    workers = _runtime_workers(cfg, args.workers)
+    poll = float(args.poll_seconds)
+    try:
+        while True:
+            had_task = False
+            for idx in range(workers):
+                worker_id = worker_base if workers == 1 else f"{worker_base}-{idx + 1}"
+                result = run_once(store, worker_id=worker_id)
+                if result.task is not None:
+                    had_task = True
+                if args.once:
+                    print(result.message)
+            if args.once:
+                break
+            if not had_task:
+                time.sleep(poll)
+    except KeyboardInterrupt:
+        print("Daemon stopped.")
+    return 0
+
+
+def cmd_coworker_runtime_print_plist(args: argparse.Namespace) -> int:
+    cfg = load_config()
+    program = resolve_program_path(args.program)
+    if program is None:
+        print("Unable to resolve program path. Use --program to specify a binary.")
+        return 1
+
+    state_dir = _runtime_state_dir(cfg, args.state_dir)
+    workers = args.workers
+    if workers is None:
+        resolved_workers = _runtime_workers(cfg, None)
+        if resolved_workers != 1:
+            workers = resolved_workers
+    if workers is not None and workers < 1:
+        print("Worker count must be >= 1.")
+        return 1
+    if args.poll_seconds is not None and args.poll_seconds <= 0:
+        print("Poll seconds must be > 0.")
+        return 1
+
+    stdout_path = (
+        Path(args.stdout_path).expanduser().resolve()
+        if args.stdout_path
+        else DEFAULT_STDOUT_PATH
+    )
+    stderr_path = (
+        Path(args.stderr_path).expanduser().resolve()
+        if args.stderr_path
+        else DEFAULT_STDERR_PATH
+    )
+
+    plist_text = render_launchd_plist(
+        program=program,
+        label=args.label,
+        state_dir=state_dir,
+        workers=workers,
+        poll_seconds=args.poll_seconds,
+        worker_id=args.worker_id,
+        stdout_path=stdout_path,
+        stderr_path=stderr_path,
+        enable_runtime_env=args.enable_runtime_env,
+    )
+    print(plist_text, end="")
     return 0
 
 
@@ -1301,6 +1592,178 @@ def build_parser() -> argparse.ArgumentParser:
         help="Additional allowed root (repeatable)",
     )
     coworker_apply.set_defaults(func=cmd_coworker_apply)
+
+    coworker_rt = sub.add_parser("coworker-runtime", help="Manage coworker runtime tasks")
+    coworker_rt_sub = coworker_rt.add_subparsers(dest="runtime_command", required=True)
+
+    rt_submit = coworker_rt_sub.add_parser("submit", help="Submit a task to the runtime")
+    rt_submit.add_argument("--plan", required=True, help="Plan JSON path")
+    rt_submit.add_argument(
+        "--bundle-root",
+        default=None,
+        help="Optional bundle directory (defaults under state dir)",
+    )
+    rt_submit.add_argument(
+        "--metadata",
+        default=None,
+        help="Extra metadata JSON to store on the task",
+    )
+    rt_submit.add_argument(
+        "--paths",
+        nargs="*",
+        default=[],
+        help="Selected files/folders to scope access",
+    )
+    rt_submit.add_argument(
+        "--allow-root",
+        action="append",
+        default=[],
+        help="Additional allowed root (repeatable)",
+    )
+    rt_submit.add_argument(
+        "--state-dir",
+        default=None,
+        help="Runtime state directory override",
+    )
+    rt_submit.set_defaults(func=cmd_coworker_runtime_submit)
+
+    rt_status = coworker_rt_sub.add_parser("status", help="Show task counts by state")
+    rt_status.add_argument("--state", default=None, help="Filter to a state")
+    rt_status.add_argument(
+        "--state-dir",
+        default=None,
+        help="Runtime state directory override",
+    )
+    rt_status.set_defaults(func=cmd_coworker_runtime_status)
+
+    rt_list = coworker_rt_sub.add_parser("list", help="List tasks")
+    rt_list.add_argument("--state", default=None, help="Filter to a state")
+    rt_list.add_argument(
+        "--state-dir",
+        default=None,
+        help="Runtime state directory override",
+    )
+    rt_list.set_defaults(func=cmd_coworker_runtime_list)
+
+    rt_logs = coworker_rt_sub.add_parser("logs", help="Show task logs")
+    rt_logs.add_argument("--task", required=True, help="Task id")
+    rt_logs.add_argument(
+        "--state-dir",
+        default=None,
+        help="Runtime state directory override",
+    )
+    rt_logs.set_defaults(func=cmd_coworker_runtime_logs)
+
+    rt_approve = coworker_rt_sub.add_parser("approve", help="Approve a plan hash")
+    rt_approve.add_argument("--plan-hash", required=True, help="Plan hash to approve")
+    rt_approve.add_argument(
+        "--checkpoint-id",
+        default=None,
+        help="Checkpoint id to approve",
+    )
+    rt_approve.add_argument(
+        "--approved-by",
+        default=None,
+        help="Approval identity",
+    )
+    rt_approve.add_argument(
+        "--state-dir",
+        default=None,
+        help="Runtime state directory override",
+    )
+    rt_approve.set_defaults(func=cmd_coworker_runtime_approve)
+
+    rt_cancel = coworker_rt_sub.add_parser("cancel", help="Cancel a task")
+    rt_cancel.add_argument("--task", required=True, help="Task id")
+    rt_cancel.add_argument(
+        "--state-dir",
+        default=None,
+        help="Runtime state directory override",
+    )
+    rt_cancel.set_defaults(func=cmd_coworker_runtime_cancel)
+
+    rt_daemon = coworker_rt_sub.add_parser("daemon", help="Run runtime worker loop")
+    rt_daemon.add_argument(
+        "--worker-id",
+        default=None,
+        help="Worker identifier",
+    )
+    rt_daemon.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Worker count override",
+    )
+    rt_daemon.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single iteration",
+    )
+    rt_daemon.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=1.0,
+        help="Polling interval when idle",
+    )
+    rt_daemon.add_argument(
+        "--state-dir",
+        default=None,
+        help="Runtime state directory override",
+    )
+    rt_daemon.set_defaults(func=cmd_coworker_runtime_daemon)
+
+    rt_plist = coworker_rt_sub.add_parser(
+        "print-plist",
+        help="Print a LaunchAgent plist for the runtime daemon",
+    )
+    rt_plist.add_argument(
+        "--label",
+        default=DEFAULT_LAUNCHD_LABEL,
+        help="LaunchAgent label",
+    )
+    rt_plist.add_argument(
+        "--program",
+        default=None,
+        help="Path to the yordam-agent binary (defaults to PATH lookup)",
+    )
+    rt_plist.add_argument(
+        "--state-dir",
+        default=None,
+        help="Runtime state directory override",
+    )
+    rt_plist.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Worker count override",
+    )
+    rt_plist.add_argument(
+        "--poll-seconds",
+        type=float,
+        default=None,
+        help="Polling interval when idle",
+    )
+    rt_plist.add_argument(
+        "--worker-id",
+        default=None,
+        help="Worker identifier",
+    )
+    rt_plist.add_argument(
+        "--stdout-path",
+        default=None,
+        help="Override StandardOutPath (defaults to /tmp)",
+    )
+    rt_plist.add_argument(
+        "--stderr-path",
+        default=None,
+        help="Override StandardErrorPath (defaults to /tmp)",
+    )
+    rt_plist.add_argument(
+        "--enable-runtime-env",
+        action="store_true",
+        help="Include YORDAM_COWORKER_RUNTIME_ENABLED=1 in EnvironmentVariables",
+    )
+    rt_plist.set_defaults(func=cmd_coworker_runtime_print_plist)
 
     return parser
 
