@@ -87,6 +87,34 @@ class TestCoworkerPlanAndPolicy(unittest.TestCase):
             errors = validate_plan(plan, policy, DEFAULT_REGISTRY)
             self.assertTrue(any("max_bytes must be positive" in err for err in errors))
 
+    def test_policy_blocks_non_numeric_read_max_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            path = root / "note.txt"
+            path.write_text("hello", encoding="utf-8")
+            plan = {
+                "version": 1,
+                "tool_calls": [
+                    {
+                        "id": "1",
+                        "tool": "fs.read_text",
+                        "args": {"path": str(path), "max_bytes": "ten"},
+                    }
+                ],
+            }
+            policy = CoworkerPolicy(
+                allowed_roots=[root],
+                max_read_bytes=1000,
+                max_write_bytes=1000,
+                max_web_bytes=1000,
+                max_query_chars=256,
+                require_approval=True,
+                web_enabled=False,
+                web_allowlist=[],
+            )
+            errors = validate_plan(plan, policy, DEFAULT_REGISTRY)
+            self.assertTrue(any("max_bytes must be integer" in err for err in errors))
+
     def test_auto_checkpoints_every_writes(self) -> None:
         tool_calls = [
             {"id": "1", "tool": "fs.apply_write_file", "args": {"path": "/tmp/a", "content": "x"}},
@@ -486,6 +514,34 @@ class TestCoworkerPlanAndPolicy(unittest.TestCase):
         )
         errors = validate_plan(plan, policy, DEFAULT_REGISTRY)
         self.assertTrue(any("max_bytes exceeds policy limit" in err for err in errors))
+
+    def test_web_fetch_blocks_non_numeric_max_bytes(self) -> None:
+        plan = {
+            "version": 1,
+            "tool_calls": [
+                {
+                    "id": "1",
+                    "tool": "web.fetch",
+                    "args": {
+                        "url": "https://example.com",
+                        "allowlist": ["example.com"],
+                        "max_bytes": "ten",
+                    },
+                }
+            ],
+        }
+        policy = CoworkerPolicy(
+            allowed_roots=[Path("/tmp")],
+            max_read_bytes=1000,
+            max_write_bytes=1000,
+            max_web_bytes=1000,
+            max_query_chars=256,
+            require_approval=True,
+            web_enabled=True,
+            web_allowlist=["example.com"],
+        )
+        errors = validate_plan(plan, policy, DEFAULT_REGISTRY)
+        self.assertTrue(any("max_bytes must be integer" in err for err in errors))
 
 
 if __name__ == "__main__":

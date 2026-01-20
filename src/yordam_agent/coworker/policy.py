@@ -87,11 +87,16 @@ def _validate_fs_call(tool_name: str, args: Dict[str, Any], policy: CoworkerPoli
         errors.append(f"{tool_name} path outside allowlist: {path}")
         return errors
     if tool_name == "fs.read_text":
-        max_bytes = int(args.get("max_bytes", policy.max_read_bytes))
-        if max_bytes <= 0:
-            errors.append("fs.read_text max_bytes must be positive")
-        if max_bytes > policy.max_read_bytes:
-            errors.append("fs.read_text max_bytes exceeds policy limit")
+        max_bytes = _parse_int(
+            args.get("max_bytes", policy.max_read_bytes),
+            "fs.read_text max_bytes",
+            errors,
+        )
+        if max_bytes is not None:
+            if max_bytes <= 0:
+                errors.append("fs.read_text max_bytes must be positive")
+            if max_bytes > policy.max_read_bytes:
+                errors.append("fs.read_text max_bytes exceeds policy limit")
         if not path.exists() or not path.is_file():
             errors.append(f"fs.read_text file missing: {path}")
     elif tool_name == "fs.list_dir":
@@ -210,11 +215,16 @@ def _validate_web_call(args: Dict[str, Any], policy: CoworkerPolicy) -> List[str
             errors.append("web.fetch query exceeds policy limit")
     if not _host_allowed(host, allowlist_entries):
         errors.append("web.fetch url not in allowlist")
-    max_bytes = int(args.get("max_bytes", policy.max_web_bytes))
-    if max_bytes <= 0:
-        errors.append("web.fetch max_bytes must be positive")
-    if max_bytes > policy.max_web_bytes:
-        errors.append("web.fetch max_bytes exceeds policy limit")
+    max_bytes = _parse_int(
+        args.get("max_bytes", policy.max_web_bytes),
+        "web.fetch max_bytes",
+        errors,
+    )
+    if max_bytes is not None:
+        if max_bytes <= 0:
+            errors.append("web.fetch max_bytes must be positive")
+        if max_bytes > policy.max_web_bytes:
+            errors.append("web.fetch max_bytes exceeds policy limit")
     method = str(args.get("method", "GET")).upper()
     if method != "GET":
         errors.append("web.fetch method must be GET")
@@ -242,6 +252,20 @@ def _is_within_roots(path: Path, roots: Iterable[Path]) -> bool:
         except ValueError:
             continue
     return False
+
+
+def _parse_int(value: Any, label: str, errors: List[str]) -> Optional[int]:
+    if isinstance(value, bool):
+        errors.append(f"{label} must be integer")
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        errors.append(f"{label} must be integer")
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        errors.append(f"{label} must be integer")
+        return None
 
 
 def _dedupe_paths(paths: Iterable[Path]) -> List[Path]:
