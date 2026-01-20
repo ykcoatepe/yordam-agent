@@ -266,6 +266,8 @@ def _claim_waiting_task(store: TaskStore, *, worker_id: str) -> Optional[TaskRec
     for task in candidates:
         checkpoint_id = task.next_checkpoint
         approval = store.latest_approval(plan_hash=task.plan_hash, checkpoint_id=checkpoint_id)
+        if approval is None and checkpoint_id is None:
+            approval = store.latest_approval_any(plan_hash=task.plan_hash)
         if approval is None:
             continue
         if store.claim_task(task.id, expected_state="waiting_approval", worker_id=worker_id):
