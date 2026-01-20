@@ -99,6 +99,10 @@ def apply_plan_with_state(
         args = call.get("args", {})
         if tool == "fs.apply_write_file":
             path = Path(args["path"]).expanduser().resolve()
+            if path.exists():
+                raise PlanValidationError(
+                    "fs.apply_write_file cannot overwrite existing file in v1"
+                )
             apply_write_file(path, args["content"])
             results.append(f"wrote:{path}")
         elif tool == "fs.move":
