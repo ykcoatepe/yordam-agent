@@ -125,7 +125,7 @@ Status legend (plain fallback): Not Started | In Progress | Blocked | Done
 - [x] Status column updated for tasks touched this go
 - [x] "Last updated" line refreshed
 - [x] Sub-plans summary updated and links valid (if sub-plans exist)
-- [ ] Completed sub-plans summarized and deleted (retained per request)
+- [x] Completed sub-plans summarized and deleted
 
 ## 7) Testing & Quality Strategy
 - **Test pyramid plan:** unit (task store), integration (daemon + executor), e2e (submit -> complete).
@@ -163,8 +163,11 @@ Locked decisions:
 - Q3 (low): Yes. Include `launchd print-plist` in v1 (optional/manual).
 
 ## 12) Sub-plans Summary
-- `subplans/implementation-plan-yordam-coworker-2026-01-18.md` (completed; retained for reference per request)
-- `subplans/implementation-plan-yordam-coworker-runtime-2026-01-18.md` (runtime track reference)
+- **AI Coworker plan (2026-01-18):** defined the local-first coworker scope, tool/policy guardrails,
+  plan→preview→approve→apply contract, file/doc/web tool set, checkpoints, and Quick Action rollout;
+  all tasks marked Done.
+- **Runtime plan (2026-01-18):** specified SQLite task store + bundles, daemon orchestration, CLI
+  commands, approvals/resume semantics, config overrides, and runbooks; all tasks marked Done.
 
 ## 13) Next Actions
 All items complete.

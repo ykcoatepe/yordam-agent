@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-
 DEFAULT_LAUNCHD_LABEL = "com.yordam.agent.coworker-runtime"
 DEFAULT_STDOUT_PATH = Path("/tmp/yordam-agent.coworker-runtime.out")
 DEFAULT_STDERR_PATH = Path("/tmp/yordam-agent.coworker-runtime.err")

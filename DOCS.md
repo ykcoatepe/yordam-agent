@@ -200,6 +200,39 @@ Rewrite with explicit output:
 yordam-agent rewrite --input /path/to/file.txt --output /path/to/out.txt
 ```
 
+### Coworker runtime (queued tasks)
+
+Enable runtime (default is off):
+
+```bash
+export YORDAM_COWORKER_RUNTIME_ENABLED=1
+```
+
+Submit a task:
+
+```bash
+yordam-agent coworker-runtime submit --plan /path/to/plan.json
+```
+
+Run the daemon (single worker):
+
+```bash
+yordam-agent coworker-runtime daemon
+```
+
+List or check status:
+
+```bash
+yordam-agent coworker-runtime list
+yordam-agent coworker-runtime status
+```
+
+Approve a plan hash:
+
+```bash
+yordam-agent coworker-runtime approve --plan-hash <hash>
+```
+
 Rewrite in place:
 
 ```bash

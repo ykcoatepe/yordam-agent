@@ -191,8 +191,11 @@ def _validate_web_call(args: Dict[str, Any], policy: CoworkerPolicy) -> List[str
     if not isinstance(allowlist, list) or not allowlist:
         errors.append("web.fetch requires per-task allowlist")
         return errors
+    allowlist_entries = [str(entry) for entry in allowlist]
+    normalized_allowlist = {entry.lower() for entry in allowlist_entries}
     if policy.web_allowlist:
-        if not set(allowlist).issubset(set(policy.web_allowlist)):
+        policy_allowlist = {str(entry).lower() for entry in policy.web_allowlist}
+        if not normalized_allowlist.issubset(policy_allowlist):
             errors.append("web.fetch allowlist not permitted by policy")
             return errors
     parsed = urlparse(url)
@@ -205,7 +208,7 @@ def _validate_web_call(args: Dict[str, Any], policy: CoworkerPolicy) -> List[str
             errors.append("web.fetch query requires allow_query=true")
         if len(parsed.query) > policy.max_query_chars:
             errors.append("web.fetch query exceeds policy limit")
-    if not _host_allowed(host, allowlist):
+    if not _host_allowed(host, allowlist_entries):
         errors.append("web.fetch url not in allowlist")
     max_bytes = int(args.get("max_bytes", policy.max_web_bytes))
     if max_bytes <= 0:

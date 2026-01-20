@@ -215,6 +215,30 @@ class TestCoworkerPlanAndPolicy(unittest.TestCase):
         errors = validate_plan(plan, policy, DEFAULT_REGISTRY)
         self.assertEqual(errors, [])
 
+    def test_web_fetch_allows_case_insensitive_allowlist(self) -> None:
+        plan = {
+            "version": 1,
+            "tool_calls": [
+                {
+                    "id": "1",
+                    "tool": "web.fetch",
+                    "args": {"url": "https://example.com", "allowlist": ["Example.COM"]},
+                }
+            ],
+        }
+        policy = CoworkerPolicy(
+            allowed_roots=[Path("/tmp")],
+            max_read_bytes=1000,
+            max_write_bytes=1000,
+            max_web_bytes=1000,
+            max_query_chars=256,
+            require_approval=True,
+            web_enabled=True,
+            web_allowlist=["example.com"],
+        )
+        errors = validate_plan(plan, policy, DEFAULT_REGISTRY)
+        self.assertEqual(errors, [])
+
     def test_policy_blocks_unknown_tool(self) -> None:
         plan = {
             "version": 1,

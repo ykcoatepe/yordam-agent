@@ -48,6 +48,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "coworker_checkpoint_every_writes": 5,
     "coworker_ocr_enabled": False,
     "coworker_ocr_prompt": True,
+    "coworker_runtime_enabled": False,
+    "coworker_runtime_state_dir": str(CONFIG_DIR / "coworker"),
+    "coworker_runtime_workers": 1,
 }
 
 ENV_OVERRIDES = {
@@ -58,6 +61,9 @@ ENV_OVERRIDES = {
     "YORDAM_REWRITE_MODEL": "rewrite_model",
     "YORDAM_REWRITE_MODEL_SECONDARY": "rewrite_model_secondary",
     "YORDAM_AI_LOG_PATH": "ai_log_path",
+    "YORDAM_COWORKER_RUNTIME_ENABLED": "coworker_runtime_enabled",
+    "YORDAM_COWORKER_RUNTIME_STATE_DIR": "coworker_runtime_state_dir",
+    "YORDAM_COWORKER_RUNTIME_WORKERS": "coworker_runtime_workers",
 }
 
 

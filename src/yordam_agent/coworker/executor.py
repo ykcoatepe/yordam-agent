@@ -38,7 +38,7 @@ def preview_plan(
         raise PlanValidationError("\n".join(errors))
     lines = build_preview(plan)
     if include_diffs:
-        lines.extend(_collect_diffs(plan))
+        lines.extend(_collect_diffs(plan, max_bytes=policy.max_read_bytes))
     return lines
 
 
@@ -83,10 +83,11 @@ def apply_plan_with_state(
         if not approval:
             raise ApprovalError("Approval required but not provided.")
         if stop_at_checkpoints and checkpoint_ids:
-            if not next_checkpoint:
-                raise ApprovalError("No remaining checkpoints to approve.")
-            if not approval_matches(plan_hash, approval, checkpoint_id=next_checkpoint):
-                raise ApprovalError("Approval does not match checkpoint.")
+            if next_checkpoint:
+                if not approval_matches(plan_hash, approval, checkpoint_id=next_checkpoint):
+                    raise ApprovalError("Approval does not match checkpoint.")
+            elif not approval_matches(plan_hash, approval):
+                raise ApprovalError("Approval does not match plan hash.")
         elif not approval_matches(plan_hash, approval):
             raise ApprovalError("Approval does not match plan hash.")
     results: List[str] = []
@@ -114,7 +115,11 @@ def apply_plan_with_state(
             results.append(f"rollback:{dst}->{src}")
         elif tool == "fs.propose_write_file":
             path = Path(args["path"]).expanduser().resolve()
-            diff = propose_write_file(path, args.get("content", ""))
+            diff = propose_write_file(
+                path,
+                args.get("content", ""),
+                max_bytes=policy.max_read_bytes,
+            )
             if diff:
                 results.append(f"diff:{path}")
         elif tool == "fs.read_text":
@@ -161,14 +166,14 @@ def _next_checkpoint(checkpoints: Iterable[str], completed_ids: set[str]) -> Opt
     return None
 
 
-def _collect_diffs(plan: Dict[str, Any]) -> List[str]:
+def _collect_diffs(plan: Dict[str, Any], *, max_bytes: int) -> List[str]:
     lines: List[str] = []
     for call in plan.get("tool_calls", []):
         if call.get("tool") != "fs.propose_write_file":
             continue
         args = call.get("args", {})
         path = Path(args["path"]).expanduser().resolve()
-        diff = propose_write_file(path, args.get("content", ""))
+        diff = propose_write_file(path, args.get("content", ""), max_bytes=max_bytes)
         if diff:
             lines.append("")
             lines.append(f"Diff for {path}:")
