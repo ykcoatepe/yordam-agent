@@ -1174,6 +1174,10 @@ def cmd_coworker_runtime_cancel(args: argparse.Namespace) -> int:
     if not _require_runtime_enabled(cfg):
         return 1
     store = _runtime_store(cfg, args.state_dir)
+    task = store.get_task(args.task)
+    if task.state in {"completed", "failed", "canceled"}:
+        print(f"Task already {task.state}; cancel ignored.")
+        return 0
     task = store.update_task_state(
         args.task, state="canceled", error="canceled by user", clear_lock=True
     )
