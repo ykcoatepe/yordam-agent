@@ -124,7 +124,7 @@ class TestCoworkerExecutor(unittest.TestCase):
                     stop_at_checkpoints=False,
                 )
 
-    def test_checkpoint_stop_returns_state(self) -> None:
+    def test_checkpoint_at_final_call_does_not_pause(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             output_a = root / "out-a.txt"
@@ -157,8 +157,7 @@ class TestCoworkerExecutor(unittest.TestCase):
                 stop_at_checkpoints=True,
             )
             self.assertTrue(any("wrote:" in result for result in results))
-            self.assertIsNotNone(state)
-            self.assertEqual(state.get("next_checkpoint"), None)
+            self.assertIsNone(state)
 
     def test_resume_after_last_checkpoint_runs_remaining_calls(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -203,11 +202,12 @@ class TestCoworkerExecutor(unittest.TestCase):
             self.assertEqual(state.get("next_checkpoint"), None)
             self.assertFalse(output_c.exists())
 
+            plan_level_approval = build_approval(plan_hash)
             _, resumed_state = apply_plan_with_state(
                 plan,
                 policy,
                 DEFAULT_REGISTRY,
-                approval=approval,
+                approval=plan_level_approval,
                 resume_state=state,
                 stop_at_checkpoints=True,
             )

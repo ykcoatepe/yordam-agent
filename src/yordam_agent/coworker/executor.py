@@ -91,7 +91,8 @@ def apply_plan_with_state(
         elif not approval_matches(plan_hash, approval):
             raise ApprovalError("Approval does not match plan hash.")
     results: List[str] = []
-    for call in plan.get("tool_calls", []):
+    tool_calls = plan.get("tool_calls", [])
+    for idx, call in enumerate(tool_calls):
         call_id = str(call.get("id", ""))
         if call_id and call_id in completed_ids:
             continue
@@ -158,6 +159,8 @@ def apply_plan_with_state(
         if call_id:
             completed_ids.add(call_id)
         if stop_at_checkpoints and call_id and call_id in checkpoint_ids:
+            if idx == len(tool_calls) - 1:
+                continue
             state = build_state(
                 plan_hash=plan_hash,
                 completed_ids=sorted(completed_ids),
