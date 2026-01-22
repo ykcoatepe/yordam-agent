@@ -108,12 +108,16 @@ def apply_plan_with_state(
         elif tool == "fs.move":
             src = Path(args["path"]).expanduser().resolve()
             dst = Path(args["dst"]).expanduser().resolve()
+            if dst.exists():
+                raise PlanValidationError("fs.move cannot overwrite existing file in v1")
             move_path(src, dst)
             results.append(f"moved:{src}->{dst}")
             results.append(f"rollback:{dst}->{src}")
         elif tool == "fs.rename":
             src = Path(args["path"]).expanduser().resolve()
             dst = Path(args["dst"]).expanduser().resolve()
+            if dst.exists():
+                raise PlanValidationError("fs.rename cannot overwrite existing file in v1")
             rename_path(src, dst)
             results.append(f"renamed:{src}->{dst}")
             results.append(f"rollback:{dst}->{src}")

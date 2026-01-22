@@ -191,6 +191,70 @@ class TestCoworkerExecutor(unittest.TestCase):
             self.assertIsNone(resumed_state)
             self.assertTrue(output_c.exists())
 
+    def test_move_rejects_existing_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            src = root / "src.txt"
+            dest = root / "dest.txt"
+            src.write_text("src", encoding="utf-8")
+            plan = {
+                "version": 1,
+                "tool_calls": [
+                    {
+                        "id": "1",
+                        "tool": "fs.apply_write_file",
+                        "args": {"path": str(dest), "content": "dest"},
+                    },
+                    {
+                        "id": "2",
+                        "tool": "fs.move",
+                        "args": {"path": str(src), "dst": str(dest)},
+                    },
+                ],
+            }
+            policy = self._policy(root, require_approval=False)
+            with self.assertRaises(PlanValidationError):
+                apply_plan_with_state(
+                    plan,
+                    policy,
+                    DEFAULT_REGISTRY,
+                    approval=None,
+                    resume_state=None,
+                    stop_at_checkpoints=False,
+                )
+
+    def test_rename_rejects_existing_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            src = root / "src.txt"
+            dest = root / "dest.txt"
+            src.write_text("src", encoding="utf-8")
+            plan = {
+                "version": 1,
+                "tool_calls": [
+                    {
+                        "id": "1",
+                        "tool": "fs.apply_write_file",
+                        "args": {"path": str(dest), "content": "dest"},
+                    },
+                    {
+                        "id": "2",
+                        "tool": "fs.rename",
+                        "args": {"path": str(src), "dst": str(dest)},
+                    },
+                ],
+            }
+            policy = self._policy(root, require_approval=False)
+            with self.assertRaises(PlanValidationError):
+                apply_plan_with_state(
+                    plan,
+                    policy,
+                    DEFAULT_REGISTRY,
+                    approval=None,
+                    resume_state=None,
+                    stop_at_checkpoints=False,
+                )
+
     def test_preview_plan_limits_diff_reads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
