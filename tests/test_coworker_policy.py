@@ -32,6 +32,7 @@ class TestCoworkerPlanAndPolicy(unittest.TestCase):
         self.assertTrue(approval_matches(plan_hash, approval))
         self.assertFalse(approval_matches("sha256:other", approval))
         approval_checkpoint = build_approval(plan_hash, checkpoint_id="cp1")
+        self.assertFalse(approval_matches(plan_hash, approval_checkpoint))
         self.assertTrue(approval_matches(plan_hash, approval_checkpoint, checkpoint_id="cp1"))
         self.assertFalse(approval_matches(plan_hash, approval_checkpoint, checkpoint_id="cp2"))
 

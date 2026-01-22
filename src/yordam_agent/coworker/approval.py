@@ -35,9 +35,10 @@ def approval_matches(
 ) -> bool:
     if approval.get("plan_hash") != plan_hash:
         return False
+    approval_checkpoint = approval.get("checkpoint_id")
     if checkpoint_id is None:
-        return True
-    return approval.get("checkpoint_id") == checkpoint_id
+        return approval_checkpoint in (None, "")
+    return approval_checkpoint == checkpoint_id
 
 
 def _utc_now() -> str:
