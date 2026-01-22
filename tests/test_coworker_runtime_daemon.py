@@ -13,7 +13,7 @@ from yordam_agent.coworker_runtime.task_store import TaskStore  # noqa: E402
 
 
 class TestCoworkerRuntimeDaemon(unittest.TestCase):
-    def test_claim_waiting_task_accepts_checkpoint_approval_for_final_segment(self) -> None:
+    def test_claim_waiting_task_ignores_checkpoint_approval_without_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "tasks.db"
             store = TaskStore(db_path)
@@ -29,6 +29,10 @@ class TestCoworkerRuntimeDaemon(unittest.TestCase):
                 approved_by="tester",
             )
 
+            claimed = _claim_waiting_task(store, worker_id="worker-1")
+            self.assertIsNone(claimed)
+
+            store.record_approval(plan_hash="sha256:test", approved_by="tester")
             claimed = _claim_waiting_task(store, worker_id="worker-1")
             self.assertIsNotNone(claimed)
             self.assertEqual(claimed.id, task.id)
