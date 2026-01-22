@@ -266,14 +266,20 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
 
 
 def _claim_waiting_task(store: TaskStore, *, worker_id: str) -> Optional[TaskRecord]:
-    candidates = store.list_tasks(state="waiting_approval", limit=50, offset=0)
-    for task in candidates:
-        checkpoint_id = task.next_checkpoint
-        approval = store.latest_approval(plan_hash=task.plan_hash, checkpoint_id=checkpoint_id)
-        if approval is None:
-            continue
-        if store.claim_task(task.id, expected_state="waiting_approval", worker_id=worker_id):
-            return store.get_task(task.id)
+    offset = 0
+    limit = 50
+    while True:
+        candidates = store.list_tasks(state="waiting_approval", limit=limit, offset=offset)
+        if not candidates:
+            return None
+        for task in candidates:
+            checkpoint_id = task.next_checkpoint
+            approval = store.latest_approval(plan_hash=task.plan_hash, checkpoint_id=checkpoint_id)
+            if approval is None:
+                continue
+            if store.claim_task(task.id, expected_state="waiting_approval", worker_id=worker_id):
+                return store.get_task(task.id)
+        offset += len(candidates)
     return None
 
 

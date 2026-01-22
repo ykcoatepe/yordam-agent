@@ -108,6 +108,32 @@ class TestCoworkerTaskStore(unittest.TestCase):
             self.assertIsNone(claimed)
             store.close()
 
+    def test_count_tasks_by_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.db"
+            store = TaskStore(db_path)
+            task_one = store.create_task(
+                plan_hash="sha256:a",
+                plan_path=Path("/tmp/plan-a.json"),
+                bundle_path=Path("/tmp/bundle-a"),
+            )
+            task_two = store.create_task(
+                plan_hash="sha256:b",
+                plan_path=Path("/tmp/plan-b.json"),
+                bundle_path=Path("/tmp/bundle-b"),
+            )
+            store.update_task_state(task_one.id, state="running")
+            store.update_task_state(task_two.id, state="failed", error="boom")
+
+            counts = store.count_tasks_by_state()
+            self.assertEqual(counts.get("running"), 1)
+            self.assertEqual(counts.get("failed"), 1)
+
+            running_only = store.count_tasks_by_state(state="running")
+            self.assertEqual(running_only, {"running": 1})
+
+            store.close()
+
 
 if __name__ == "__main__":
     unittest.main()

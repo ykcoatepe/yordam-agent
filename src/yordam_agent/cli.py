@@ -1128,10 +1128,7 @@ def cmd_coworker_runtime_status(args: argparse.Namespace) -> int:
     if not _require_runtime_enabled(cfg):
         return 1
     store = _runtime_store(cfg, args.state_dir)
-    tasks = store.list_tasks(state=args.state, limit=200, offset=0)
-    counts: Dict[str, int] = {}
-    for task in tasks:
-        counts[task.state] = counts.get(task.state, 0) + 1
+    counts = store.count_tasks_by_state(state=args.state)
     if not counts:
         print("No tasks.")
         return 0

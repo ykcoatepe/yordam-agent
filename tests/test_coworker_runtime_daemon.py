@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -37,6 +38,36 @@ class TestCoworkerRuntimeDaemon(unittest.TestCase):
             self.assertIsNotNone(claimed)
             self.assertEqual(claimed.id, task.id)
             self.assertEqual(claimed.state, "running")
+
+            store.close()
+
+    def test_claim_waiting_task_paginates_waiting_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.db"
+            store = TaskStore(db_path)
+            tasks = []
+            for idx in range(55):
+                task = store.create_task(
+                    plan_hash=f"sha256:{idx}",
+                    plan_path=Path(f"/tmp/plan-{idx}.json"),
+                    bundle_path=Path(f"/tmp/bundle-{idx}"),
+                )
+                store.update_task_state(task.id, state="waiting_approval")
+                tasks.append(task)
+
+            base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            with store._conn:
+                for idx, task in enumerate(tasks):
+                    created_at = base_time + timedelta(seconds=idx)
+                    store._conn.execute(
+                        "UPDATE tasks SET created_at = ?, updated_at = ? WHERE id = ?",
+                        (created_at.isoformat(), created_at.isoformat(), task.id),
+                    )
+
+            store.record_approval(plan_hash=tasks[0].plan_hash, approved_by="tester")
+            claimed = _claim_waiting_task(store, worker_id="worker-1")
+            self.assertIsNotNone(claimed)
+            self.assertEqual(claimed.id, tasks[0].id)
 
             store.close()
 

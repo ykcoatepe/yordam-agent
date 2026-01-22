@@ -222,6 +222,16 @@ class TaskStore:
         rows = self._conn.execute(sql, params).fetchall()
         return [_task_from_row(row) for row in rows]
 
+    def count_tasks_by_state(self, *, state: Optional[str] = None) -> Dict[str, int]:
+        params: List[Any] = []
+        sql = "SELECT state, COUNT(*) AS count FROM tasks"
+        if state:
+            sql += " WHERE state = ?"
+            params.append(state)
+        sql += " GROUP BY state ORDER BY state"
+        rows = self._conn.execute(sql, params).fetchall()
+        return {row["state"]: int(row["count"]) for row in rows}
+
     def claim_task(self, task_id: str, *, expected_state: str, worker_id: str) -> bool:
         now = _utc_now()
         with self._conn:
