@@ -212,6 +212,10 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
 
         _emit_tool_results(bundle_paths, task_id=task.id, results=results)
 
+        if store.get_task(task.id).state == "canceled":
+            retain_lock = False
+            return
+
         if state is not None:
             write_state(bundle_paths.resume_state_path, state)
             store.update_task_state(
