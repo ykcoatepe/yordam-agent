@@ -55,7 +55,7 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> bool:
         bundle_paths = ensure_task_bundle(
             bundle_root,
             task_id=latest.id,
-            plan=load_plan(Path(latest.plan_path)),
+            plan=load_plan(_plan_path_for_task(latest)),
             metadata=latest.metadata,
         )
         append_event(
@@ -75,9 +75,8 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> bool:
         return False
     try:
         cfg = load_config()
-        plan_path = Path(task.plan_path)
         bundle_root = Path(task.bundle_path)
-        plan = load_plan(plan_path)
+        plan = load_plan(_plan_path_for_task(task))
         plan_hash = ensure_plan_hash(plan)
         if plan_hash != task.plan_hash:
             error = "plan hash mismatch; refusing to execute"
@@ -360,6 +359,13 @@ def _load_resume_state(bundle_paths) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _plan_path_for_task(task: TaskRecord) -> Path:
+    bundle_plan_path = Path(task.bundle_path) / "plan.json"
+    if bundle_plan_path.exists():
+        return bundle_plan_path
+    return Path(task.plan_path)
+
+
 def _try_lock_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> Optional[LockHandle]:
     selected_paths = _paths_from_metadata(task.metadata.get("selected_paths"))
     if not selected_paths:
@@ -377,7 +383,7 @@ def _try_lock_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> Opt
         bundle_paths = ensure_task_bundle(
             bundle_root,
             task_id=task.id,
-            plan=load_plan(Path(task.plan_path)),
+            plan=load_plan(_plan_path_for_task(task)),
             metadata=task.metadata,
         )
         append_event(

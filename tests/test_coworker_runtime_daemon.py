@@ -15,6 +15,7 @@ from yordam_agent.coworker_runtime.daemon import (  # noqa: E402
     run_once,
 )
 from yordam_agent.coworker_runtime.locks import acquire_locks  # noqa: E402
+from yordam_agent.coworker_runtime.task_bundle import ensure_task_bundle  # noqa: E402
 from yordam_agent.coworker_runtime.task_store import TaskStore  # noqa: E402
 
 
@@ -124,6 +125,42 @@ class TestCoworkerRuntimeDaemon(unittest.TestCase):
             self.assertIsNotNone(result.task)
             self.assertEqual(result.task.id, waiting_task.id)
             self.assertEqual(store.get_task(queued_task.id).state, "queued")
+
+            store.close()
+
+    def test_run_task_loads_plan_from_bundle_when_original_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            selected_path = root / "note.txt"
+            selected_path.write_text("hello", encoding="utf-8")
+            plan = {
+                "version": 1,
+                "created_at": "20260101T000000Z",
+                "tool_calls": [
+                    {"id": "1", "tool": "fs.read_text", "args": {"path": str(selected_path)}}
+                ],
+            }
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            store = TaskStore(root / "tasks.db")
+            task = store.create_task(
+                plan_hash=compute_plan_hash(plan),
+                plan_path=plan_path,
+                bundle_path=root / "bundle",
+                metadata={"selected_paths": [str(selected_path)]},
+            )
+            ensure_task_bundle(
+                Path(task.bundle_path),
+                task_id=task.id,
+                plan=plan,
+                metadata=task.metadata,
+            )
+            plan_path.unlink()
+            store.record_approval(plan_hash=task.plan_hash, approved_by="tester")
+
+            processed = _run_task(task, store=store, worker_id="worker-1")
+            self.assertTrue(processed)
+            self.assertEqual(store.get_task(task.id).state, "completed")
 
             store.close()
 
