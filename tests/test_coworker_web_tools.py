@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from yordam_agent.coworker.web_tools import fetch_url  # noqa: E402
+from yordam_agent.coworker.web_tools import fetch_url, sanitize_html  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -81,3 +81,15 @@ class TestFetchUrlRedirects(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 fetch_url(url, max_bytes=32, allowlist=["localhost"])
             self.assertIn("redirect", str(ctx.exception).lower())
+
+
+class TestSanitizeHtml(unittest.TestCase):
+    def test_sanitize_html_strips_script_and_style_contents(self) -> None:
+        raw = (
+            "<html><body>Hi"
+            "<script>console.log('x')</script>"
+            "<style>body{color:red}</style>"
+            "there</body></html>"
+        )
+        cleaned = sanitize_html(raw)
+        self.assertEqual(cleaned, "Hi there")

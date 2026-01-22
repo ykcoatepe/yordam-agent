@@ -37,10 +37,10 @@ def fetch_url(
 
 
 def sanitize_html(value: str) -> str:
-    cleaned = re.sub(r"(?is)<(script|style).*?>.*?</\\1>", " ", value)
+    cleaned = re.sub(r"(?is)<(script|style).*?>.*?</\1>", " ", value)
     cleaned = re.sub(r"(?is)<[^>]+>", " ", cleaned)
     cleaned = html.unescape(cleaned)
-    cleaned = re.sub(r"\\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
 
