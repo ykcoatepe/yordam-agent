@@ -101,6 +101,29 @@ class TestCoworkerExecutor(unittest.TestCase):
                     stop_at_checkpoints=False,
                 )
 
+    def test_rejects_unknown_checkpoint_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            path = root / "note.txt"
+            path.write_text("hello", encoding="utf-8")
+            plan = {
+                "version": 1,
+                "tool_calls": [
+                    {"id": "1", "tool": "fs.read_text", "args": {"path": str(path)}}
+                ],
+                "checkpoints": ["missing"],
+            }
+            policy = self._policy(root, require_approval=False)
+            with self.assertRaises(PlanValidationError):
+                apply_plan_with_state(
+                    plan,
+                    policy,
+                    DEFAULT_REGISTRY,
+                    approval=None,
+                    resume_state=None,
+                    stop_at_checkpoints=False,
+                )
+
     def test_checkpoint_stop_returns_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()

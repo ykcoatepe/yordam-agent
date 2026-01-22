@@ -73,6 +73,22 @@ def validate_plan(
             errors.extend(_validate_doc_call(tool_name, args, policy))
         elif tool_name == "web.fetch":
             errors.extend(_validate_web_call(args, policy))
+    tool_call_ids = {
+        str(call.get("id"))
+        for call in tool_calls
+        if call.get("id") not in (None, "")
+    }
+    checkpoints = plan.get("checkpoints", [])
+    if checkpoints:
+        if not isinstance(checkpoints, list):
+            errors.append("checkpoints must be list")
+        else:
+            for checkpoint in checkpoints:
+                if not isinstance(checkpoint, (str, int)):
+                    errors.append("checkpoint id must be string or integer")
+                    continue
+                if str(checkpoint) not in tool_call_ids:
+                    errors.append(f"checkpoint id not found in tool_calls: {checkpoint}")
     return errors
 
 
