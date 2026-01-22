@@ -9,7 +9,12 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from yordam_agent.coworker.plan import compute_plan_hash  # noqa: E402
-from yordam_agent.coworker_runtime.daemon import _claim_waiting_task, _run_task  # noqa: E402
+from yordam_agent.coworker_runtime.daemon import (  # noqa: E402
+    _claim_waiting_task,
+    _run_task,
+    run_once,
+)
+from yordam_agent.coworker_runtime.locks import acquire_locks  # noqa: E402
 from yordam_agent.coworker_runtime.task_store import TaskStore  # noqa: E402
 
 
@@ -68,6 +73,57 @@ class TestCoworkerRuntimeDaemon(unittest.TestCase):
             claimed = _claim_waiting_task(store, worker_id="worker-1")
             self.assertIsNotNone(claimed)
             self.assertEqual(claimed.id, tasks[0].id)
+
+            store.close()
+
+    def test_run_once_prefers_waiting_task_when_lock_busy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            selected_path = root / "note.txt"
+            selected_path.write_text("hello", encoding="utf-8")
+            waiting_plan = {
+                "version": 1,
+                "tool_calls": [
+                    {"id": "1", "tool": "fs.read_text", "args": {"path": str(selected_path)}}
+                ],
+            }
+            queued_plan = {
+                "version": 1,
+                "tool_calls": [
+                    {"id": "1", "tool": "fs.read_text", "args": {"path": str(selected_path)}}
+                ],
+            }
+            waiting_path = root / "waiting.json"
+            queued_path = root / "queued.json"
+            waiting_path.write_text(json.dumps(waiting_plan), encoding="utf-8")
+            queued_path.write_text(json.dumps(queued_plan), encoding="utf-8")
+            store = TaskStore(root / "tasks.db")
+            waiting_task = store.create_task(
+                plan_hash=compute_plan_hash(waiting_plan),
+                plan_path=waiting_path,
+                bundle_path=root / "bundle-waiting",
+                metadata={"selected_paths": [str(selected_path)]},
+                state="waiting_approval",
+            )
+            queued_task = store.create_task(
+                plan_hash=compute_plan_hash(queued_plan),
+                plan_path=queued_path,
+                bundle_path=root / "bundle-queued",
+                metadata={"selected_paths": [str(selected_path)]},
+                state="queued",
+            )
+            store.record_approval(plan_hash=waiting_task.plan_hash, approved_by="tester")
+            acquire_locks(
+                [selected_path],
+                locks_dir=store.db_path.parent / "locks",
+                task_id=waiting_task.id,
+                owner="worker-1",
+            )
+
+            result = run_once(store, worker_id="worker-1")
+            self.assertIsNotNone(result.task)
+            self.assertEqual(result.task.id, waiting_task.id)
+            self.assertEqual(store.get_task(queued_task.id).state, "queued")
 
             store.close()
 

@@ -26,14 +26,27 @@ def run_once(store: TaskStore, *, worker_id: str) -> DaemonResult:
         if task is None:
             return DaemonResult(task=None, message="no queued tasks")
     try:
-        _run_task(task, store=store, worker_id=worker_id)
+        processed = _run_task(task, store=store, worker_id=worker_id)
     except Exception as exc:  # noqa: BLE001 - daemon must not crash
         store.update_task_state(task.id, state="failed", error=str(exc), clear_lock=True)
         return DaemonResult(task=task, message=f"task failed: {exc}")
-    return DaemonResult(task=store.get_task(task.id), message="task processed")
+    if processed:
+        return DaemonResult(task=store.get_task(task.id), message="task processed")
+    waiting_task = _claim_waiting_task(store, worker_id=worker_id)
+    if waiting_task is None:
+        return DaemonResult(task=store.get_task(task.id), message="task deferred (locks busy)")
+    try:
+        waiting_processed = _run_task(waiting_task, store=store, worker_id=worker_id)
+    except Exception as exc:  # noqa: BLE001 - daemon must not crash
+        store.update_task_state(
+            waiting_task.id, state="failed", error=str(exc), clear_lock=True
+        )
+        return DaemonResult(task=waiting_task, message=f"task failed: {exc}")
+    message = "task processed" if waiting_processed else "task deferred (locks busy)"
+    return DaemonResult(task=store.get_task(waiting_task.id), message=message)
 
 
-def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
+def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> bool:
     lock_handle: Optional[LockHandle] = None
     retain_lock = False
     latest = store.get_task(task.id)
@@ -56,10 +69,10 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
             state="canceled",
             metadata=latest.metadata,
         )
-        return
+        return True
     lock_handle = _try_lock_task(task, store=store, worker_id=worker_id)
     if lock_handle is None:
-        return
+        return False
     try:
         cfg = load_config()
         plan_path = Path(task.plan_path)
@@ -92,7 +105,7 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
                 metadata=task.metadata,
                 error=error,
             )
-            return
+            return True
 
         selected_paths = _paths_from_metadata(task.metadata.get("selected_paths"))
         extra_roots = _paths_from_metadata(task.metadata.get("allow_roots"))
@@ -151,7 +164,7 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
                     metadata=task.metadata,
                 )
                 retain_lock = True
-                return
+                return True
 
             results, state = apply_plan_with_state(
                 plan,
@@ -186,7 +199,7 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
                 metadata=task.metadata,
             )
             retain_lock = True
-            return
+            return True
         except PlanValidationError as exc:
             store.update_task_state(
                 task.id, state="failed", error=str(exc), clear_lock=True
@@ -208,13 +221,13 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
                 metadata=task.metadata,
                 error=str(exc),
             )
-            return
+            return True
 
         _emit_tool_results(bundle_paths, task_id=task.id, results=results)
 
         if store.get_task(task.id).state == "canceled":
             retain_lock = False
-            return
+            return True
 
         if state is not None:
             write_state(bundle_paths.resume_state_path, state)
@@ -240,7 +253,7 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
                 state="waiting_approval",
                 metadata=task.metadata,
             )
-            return
+            return True
 
         store.update_task_state(
             task.id,
@@ -263,6 +276,7 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> None:
     finally:
         if lock_handle and not retain_lock:
             lock_handle.release()
+    return True
 
 
 def _claim_waiting_task(store: TaskStore, *, worker_id: str) -> Optional[TaskRecord]:
