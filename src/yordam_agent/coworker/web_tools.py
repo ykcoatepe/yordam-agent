@@ -29,7 +29,13 @@ def fetch_url(
     )
     req = urllib.request.Request(url, method="GET")
     try:
-        opener = urllib.request.build_opener(_AllowlistRedirectHandler(allowlist_entries))
+        opener = urllib.request.build_opener(
+            _AllowlistRedirectHandler(
+                allowlist_entries,
+                allow_query=allow_query,
+                max_query_chars=max_query_chars,
+            )
+        )
         with opener.open(req, timeout=timeout) as resp:
             final_url = resp.geturl()
             _ensure_allowed_url(final_url, allowlist_entries, context="redirect")
@@ -81,13 +87,27 @@ def _is_html(content_type: str, text: str) -> bool:
 
 
 class _AllowlistRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def __init__(self, allowlist: Iterable[str]) -> None:
+    def __init__(
+        self,
+        allowlist: Iterable[str],
+        *,
+        allow_query: bool,
+        max_query_chars: Optional[int],
+    ) -> None:
         super().__init__()
         self._allowlist = tuple(allowlist)
+        self._allow_query = allow_query
+        self._max_query_chars = max_query_chars
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         try:
             _ensure_allowed_url(newurl, self._allowlist, context="redirect")
+            _ensure_query_allowed(
+                newurl,
+                allow_query=self._allow_query,
+                max_query_chars=self._max_query_chars,
+                context="redirect",
+            )
         except urllib.error.URLError:
             if fp is not None:
                 fp.close()
