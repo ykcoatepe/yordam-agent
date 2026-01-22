@@ -67,6 +67,25 @@ class RedirectDisallowedHostHandler(_BaseHandler):
         self.end_headers()
 
 
+class RedirectQueryHandler(_BaseHandler):
+    def do_GET(self):
+        if self.path == "/redirect":
+            self.send_response(302)
+            self.send_header("Location", "/final?token=abc")
+            self.end_headers()
+            return
+        if self.path.startswith("/final"):
+            body = b"ok"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+
 class TestFetchUrlRedirects(unittest.TestCase):
     def test_fetch_url_allows_redirect_to_allowlisted_host(self) -> None:
         with run_server(RedirectSameHostHandler) as server:
@@ -82,6 +101,31 @@ class TestFetchUrlRedirects(unittest.TestCase):
                 fetch_url(url, max_bytes=32, allowlist=["localhost"])
             self.assertIn("redirect", str(ctx.exception).lower())
 
+    def test_fetch_url_blocks_redirect_query_without_allow(self) -> None:
+        with run_server(RedirectQueryHandler) as server:
+            url = f"http://127.0.0.1:{server.server_address[1]}/redirect"
+            with self.assertRaises(RuntimeError) as ctx:
+                fetch_url(
+                    url,
+                    max_bytes=32,
+                    allowlist=["127.0.0.1"],
+                    allow_query=False,
+                    max_query_chars=10,
+                )
+            self.assertIn("query", str(ctx.exception).lower())
+
+    def test_fetch_url_allows_redirect_query_when_allowed(self) -> None:
+        with run_server(RedirectQueryHandler) as server:
+            url = f"http://127.0.0.1:{server.server_address[1]}/redirect"
+            body, content_type = fetch_url(
+                url,
+                max_bytes=32,
+                allowlist=["127.0.0.1"],
+                allow_query=True,
+                max_query_chars=32,
+            )
+            self.assertEqual(body, "ok")
+            self.assertEqual(content_type, "text/plain")
 
 class TestSanitizeHtml(unittest.TestCase):
     def test_sanitize_html_strips_script_and_style_contents(self) -> None:

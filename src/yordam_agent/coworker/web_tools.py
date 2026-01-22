@@ -11,6 +11,8 @@ def fetch_url(
     *,
     max_bytes: int,
     allowlist: Iterable[str],
+    allow_query: bool = False,
+    max_query_chars: Optional[int] = None,
     timeout: float = 15.0,
 ) -> Tuple[str, str]:
     if max_bytes <= 0:
@@ -19,11 +21,24 @@ def fetch_url(
     if not allowlist_entries:
         raise RuntimeError("web.fetch allowlist must be provided")
     _ensure_allowed_url(url, allowlist_entries, context="url")
+    _ensure_query_allowed(
+        url,
+        allow_query=allow_query,
+        max_query_chars=max_query_chars,
+        context="url",
+    )
     req = urllib.request.Request(url, method="GET")
     try:
         opener = urllib.request.build_opener(_AllowlistRedirectHandler(allowlist_entries))
         with opener.open(req, timeout=timeout) as resp:
-            _ensure_allowed_url(resp.geturl(), allowlist_entries, context="redirect")
+            final_url = resp.geturl()
+            _ensure_allowed_url(final_url, allowlist_entries, context="redirect")
+            _ensure_query_allowed(
+                final_url,
+                allow_query=allow_query,
+                max_query_chars=max_query_chars,
+                context="redirect",
+            )
             content_type = resp.headers.get("Content-Type", "")
             raw = resp.read(max_bytes + 1)
     except urllib.error.URLError as exc:
@@ -87,6 +102,24 @@ def _ensure_allowed_url(url: str, allowlist: Iterable[str], *, context: str) -> 
     host = parsed.hostname or ""
     if not _host_allowed(host, allowlist):
         raise urllib.error.URLError(f"{context} blocked to disallowed host: {host}")
+
+
+def _ensure_query_allowed(
+    url: str,
+    *,
+    allow_query: bool,
+    max_query_chars: Optional[int],
+    context: str,
+) -> None:
+    parsed = urlparse(url)
+    if not parsed.query:
+        return
+    if not allow_query:
+        raise urllib.error.URLError(f"{context} blocked to disallowed query")
+    if max_query_chars is not None and len(parsed.query) > max_query_chars:
+        raise urllib.error.URLError(
+            f"{context} blocked to oversized query ({len(parsed.query)})"
+        )
 
 
 def _host_allowed(host: str, allowlist: Iterable[str]) -> bool:

@@ -152,7 +152,14 @@ def apply_plan_with_state(
             url = str(args["url"])
             allowlist = list(args.get("allowlist", []))
             max_bytes = int(args.get("max_bytes", policy.max_web_bytes))
-            body, content_type = fetch_url(url, max_bytes=max_bytes, allowlist=allowlist)
+            allow_query = bool(args.get("allow_query", False))
+            body, content_type = fetch_url(
+                url,
+                max_bytes=max_bytes,
+                allowlist=allowlist,
+                allow_query=allow_query,
+                max_query_chars=policy.max_query_chars,
+            )
             results.append(f"web:{url} bytes={len(body.encode('utf-8'))} type={content_type}")
         else:
             results.append(f"skipped:{tool}")
