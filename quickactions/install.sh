@@ -133,8 +133,8 @@ fi
 
 context=$(osascript -e 'text returned of (display dialog "Reorg context (optional):" default answer "" with title "Yordam Agent" buttons {"Cancel","Continue"} default button "Continue" cancel button "Cancel")') || exit 0
 
-if [ ${#files[@]} -eq 1 ] && [ -d "${files[1]}" ]; then
-  root="${files[1]}"
+if [ ${#files[@]} -eq 1 ] && [ -d "${files[0]}" ]; then
+  root="${files[0]}"
 else
   resolve_parent() {
     python3 - "$1" <<'PY'
@@ -144,7 +144,7 @@ import sys
 print(os.path.realpath(os.path.dirname(sys.argv[1])))
 PY
   }
-  parent="$(resolve_parent "${files[1]}")"
+  parent="$(resolve_parent "${files[0]}")"
   for f in "${files[@]}"; do
     if [ -d "$f" ]; then
       osascript -e 'display dialog "Select a single folder OR multiple files (no mixed selection)." with title "Yordam Agent" buttons {"OK"} default button "OK"'
@@ -384,7 +384,7 @@ normalized_files=()
 for f in "${files[@]}"; do
   normalized_files+=("$(normalize_path "$f")")
 done
-parent="$(resolve_parent "${normalized_files[1]}")"
+parent="$(resolve_parent "${normalized_files[0]}")"
 for f in "${files[@]}"; do
   nf="$(normalize_path "$f")"
   if [ -d "$nf" ]; then
