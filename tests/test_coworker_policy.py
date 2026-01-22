@@ -60,6 +60,31 @@ class TestCoworkerPlanAndPolicy(unittest.TestCase):
             errors = validate_plan(plan, policy, DEFAULT_REGISTRY)
             self.assertEqual(errors, [])
 
+    def test_policy_blocks_duplicate_tool_call_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            path = root / "note.txt"
+            path.write_text("hello", encoding="utf-8")
+            plan = {
+                "version": 1,
+                "tool_calls": [
+                    {"id": "1", "tool": "fs.read_text", "args": {"path": str(path)}},
+                    {"id": "1", "tool": "fs.read_text", "args": {"path": str(path)}},
+                ],
+            }
+            policy = CoworkerPolicy(
+                allowed_roots=[root],
+                max_read_bytes=1000,
+                max_write_bytes=1000,
+                max_web_bytes=1000,
+                max_query_chars=256,
+                require_approval=True,
+                web_enabled=False,
+                web_allowlist=[],
+            )
+            errors = validate_plan(plan, policy, DEFAULT_REGISTRY)
+            self.assertTrue(any("duplicate tool_call id" in err for err in errors))
+
     def test_policy_blocks_non_positive_read_max_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()

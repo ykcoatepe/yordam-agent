@@ -55,6 +55,19 @@ def validate_plan(
     tool_calls = plan.get("tool_calls", [])
     if not policy.allowed_roots:
         errors.append("No allowed roots configured for coworker plan.")
+    seen_ids: set[str] = set()
+    duplicate_ids: set[str] = set()
+    for call in tool_calls:
+        call_id = call.get("id")
+        if call_id in (None, ""):
+            continue
+        call_key = str(call_id)
+        if call_key in seen_ids:
+            duplicate_ids.add(call_key)
+        else:
+            seen_ids.add(call_key)
+    for call_id in sorted(duplicate_ids):
+        errors.append(f"duplicate tool_call id: {call_id}")
     for call in tool_calls:
         tool_name = call.get("tool")
         args = call.get("args", {})
