@@ -35,6 +35,7 @@ from .coworker_runtime.launchd import (
 from .coworker_runtime.locks import release_task_locks
 from .coworker_runtime.task_bundle import (
     append_event,
+    bundle_paths as build_bundle_paths,
     ensure_task_bundle,
     update_task_snapshot,
 )
@@ -1188,12 +1189,23 @@ def cmd_coworker_runtime_cancel(args: argparse.Namespace) -> int:
             task_id=task.id,
         )
     if bundle_root.exists():
-        bundle_paths = ensure_task_bundle(
-            bundle_root,
-            task_id=task.id,
-            plan=load_plan(Path(task.plan_path)),
-            metadata=task.metadata,
-        )
+        plan = None
+        bundle_plan_path = bundle_root / "plan.json"
+        if bundle_plan_path.exists():
+            plan = load_plan(bundle_plan_path)
+        else:
+            task_plan_path = Path(task.plan_path)
+            if task_plan_path.exists():
+                plan = load_plan(task_plan_path)
+        if plan is not None:
+            bundle_paths = ensure_task_bundle(
+                bundle_root,
+                task_id=task.id,
+                plan=plan,
+                metadata=task.metadata,
+            )
+        else:
+            bundle_paths = build_bundle_paths(bundle_root)
         append_event(
             bundle_paths,
             {"task_id": task.id, "event": "task_canceled", "state": "canceled"},
