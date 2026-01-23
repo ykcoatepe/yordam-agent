@@ -1155,7 +1155,11 @@ def cmd_coworker_runtime_logs(args: argparse.Namespace) -> int:
     if not _require_runtime_enabled(cfg):
         return 1
     store = _runtime_store(cfg, args.state_dir)
-    task = store.get_task(args.task)
+    try:
+        task = store.get_task(args.task)
+    except KeyError:
+        print(f"Task not found: {args.task}")
+        return 2
     events_path = Path(task.bundle_path) / "events.jsonl"
     if not events_path.exists():
         print("No events yet.")
