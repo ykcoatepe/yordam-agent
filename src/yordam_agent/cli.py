@@ -35,9 +35,11 @@ from .coworker_runtime.launchd import (
 from .coworker_runtime.locks import release_task_locks
 from .coworker_runtime.task_bundle import (
     append_event,
-    bundle_paths as build_bundle_paths,
     ensure_task_bundle,
     update_task_snapshot,
+)
+from .coworker_runtime.task_bundle import (
+    bundle_paths as build_bundle_paths,
 )
 from .coworker_runtime.task_store import TaskStore
 from .documents_organizer import main as documents_main

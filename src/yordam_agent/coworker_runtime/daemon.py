@@ -395,5 +395,12 @@ def _try_lock_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> Opt
                 "message": "path locks busy",
             },
         )
+        update_task_snapshot(
+            bundle_paths,
+            task_id=task.id,
+            plan_hash=task.plan_hash,
+            state="queued",
+            metadata=task.metadata,
+        )
         return None
     return handle

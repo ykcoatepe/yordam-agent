@@ -252,7 +252,8 @@ class TaskStore:
         with self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
             row = self._conn.execute(
-                "SELECT * FROM tasks WHERE state = ? ORDER BY updated_at ASC, created_at ASC LIMIT 1",
+                "SELECT * FROM tasks WHERE state = ? "
+                "ORDER BY updated_at ASC, created_at ASC LIMIT 1",
                 ("queued",),
             ).fetchone()
             if row is None:
