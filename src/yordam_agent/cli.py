@@ -1176,12 +1176,16 @@ def cmd_coworker_runtime_cancel(args: argparse.Namespace) -> int:
     if task.state in {"completed", "failed", "canceled"}:
         print(f"Task already {task.state}; cancel ignored.")
         return 0
+    was_running = task.state == "running"
     task = store.update_task_state(
-        args.task, state="canceled", error="canceled by user", clear_lock=True
+        args.task,
+        state="canceled",
+        error="canceled by user",
+        clear_lock=not was_running,
     )
     bundle_root = Path(task.bundle_path)
     selected_paths = task.metadata.get("selected_paths")
-    if selected_paths:
+    if selected_paths and not was_running:
         locks_dir = store.db_path.parent / "locks"
         release_task_locks(
             [Path(p) for p in selected_paths],
