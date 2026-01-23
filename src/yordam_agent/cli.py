@@ -1197,13 +1197,25 @@ def cmd_coworker_runtime_cancel(args: argparse.Namespace) -> int:
     )
     bundle_root = Path(task.bundle_path)
     selected_paths = task.metadata.get("selected_paths")
-    if selected_paths and not was_running:
-        locks_dir = store.db_path.parent / "locks"
-        release_task_locks(
-            [Path(p) for p in selected_paths],
-            locks_dir=locks_dir,
-            task_id=task.id,
-        )
+    if not was_running:
+        release_paths: list[Path] = []
+        if selected_paths:
+            release_paths.extend(Path(p) for p in selected_paths)
+        allowed_roots = task.metadata.get("allowed_roots")
+        if allowed_roots:
+            release_paths.extend(Path(p) for p in allowed_roots)
+        else:
+            extra_roots = task.metadata.get("allow_roots")
+            if extra_roots:
+                release_paths.extend(Path(p) for p in extra_roots)
+        if release_paths:
+            locks_dir = store.db_path.parent / "locks"
+            deduped = list({path.expanduser().resolve() for path in release_paths})
+            release_task_locks(
+                deduped,
+                locks_dir=locks_dir,
+                task_id=task.id,
+            )
     if bundle_root.exists():
         plan = None
         bundle_plan_path = bundle_root / "plan.json"

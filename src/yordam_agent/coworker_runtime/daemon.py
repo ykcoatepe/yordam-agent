@@ -80,7 +80,7 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> bool:
         extra_roots,
         allowed_roots_override=allowed_roots or None,
     )
-    lock_paths = selected_paths or policy.allowed_roots
+    lock_paths = policy.allowed_roots or selected_paths
     if not lock_paths:
         lock_paths = [store.db_path.parent]
     lock_handle = _try_lock_task(
