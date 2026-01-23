@@ -14,7 +14,7 @@ from yordam_agent.coworker_runtime.daemon import (  # noqa: E402
     _run_task,
     run_once,
 )
-from yordam_agent.coworker_runtime.locks import acquire_locks  # noqa: E402
+from yordam_agent.coworker_runtime.locks import LockHandle, acquire_locks  # noqa: E402
 from yordam_agent.coworker_runtime.task_bundle import (  # noqa: E402
     ensure_task_bundle,
     update_task_snapshot,
@@ -253,6 +253,38 @@ class TestCoworkerRuntimeDaemon(unittest.TestCase):
                 _run_task(task, store=store, worker_id="worker-1")
 
             self.assertEqual(store.get_task(task.id).state, "canceled")
+            store.close()
+
+    def test_run_task_locks_state_dir_when_paths_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = {"version": 1, "tool_calls": []}
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            store = TaskStore(root / "tasks.db")
+            task = store.create_task(
+                plan_hash=compute_plan_hash(plan),
+                plan_path=plan_path,
+                bundle_path=root / "bundle",
+            )
+            store.record_approval(plan_hash=task.plan_hash, approved_by="tester")
+            captured: dict[str, list[Path]] = {}
+
+            def _fake_acquire(paths, *, locks_dir, task_id, owner):
+                captured["paths"] = list(paths)
+                return LockHandle(paths=list(paths), lock_files=[locks_dir / "fake.lock"])
+
+            with patch(
+                "yordam_agent.coworker_runtime.daemon.acquire_locks",
+                side_effect=_fake_acquire,
+            ), patch(
+                "yordam_agent.coworker_runtime.daemon.apply_plan_with_state",
+                return_value=([], None),
+            ):
+                processed = _run_task(task, store=store, worker_id="worker-1")
+
+            self.assertTrue(processed)
+            self.assertEqual(captured["paths"], [store.db_path.parent])
             store.close()
 
 

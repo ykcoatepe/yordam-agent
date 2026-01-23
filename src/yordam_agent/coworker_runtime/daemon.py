@@ -70,11 +70,19 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> bool:
             metadata=latest.metadata,
         )
         return True
-    lock_handle = _try_lock_task(task, store=store, worker_id=worker_id)
+    cfg = load_config()
+    selected_paths = _paths_from_metadata(task.metadata.get("selected_paths"))
+    extra_roots = _paths_from_metadata(task.metadata.get("allow_roots"))
+    policy = policy_from_config(cfg, selected_paths, extra_roots)
+    lock_paths = selected_paths or policy.allowed_roots
+    if not lock_paths:
+        lock_paths = [store.db_path.parent]
+    lock_handle = _try_lock_task(
+        task, store=store, worker_id=worker_id, lock_paths=lock_paths
+    )
     if lock_handle is None:
         return False
     try:
-        cfg = load_config()
         bundle_root = Path(task.bundle_path)
         plan = load_plan(_plan_path_for_task(task))
         plan_hash = ensure_plan_hash(plan)
@@ -105,10 +113,6 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> bool:
                 error=error,
             )
             return True
-
-        selected_paths = _paths_from_metadata(task.metadata.get("selected_paths"))
-        extra_roots = _paths_from_metadata(task.metadata.get("allow_roots"))
-        policy = policy_from_config(cfg, selected_paths, extra_roots)
 
         bundle_paths = ensure_task_bundle(
             bundle_root,
@@ -366,13 +370,18 @@ def _plan_path_for_task(task: TaskRecord) -> Path:
     return Path(task.plan_path)
 
 
-def _try_lock_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> Optional[LockHandle]:
-    selected_paths = _paths_from_metadata(task.metadata.get("selected_paths"))
-    if not selected_paths:
+def _try_lock_task(
+    task: TaskRecord,
+    *,
+    store: TaskStore,
+    worker_id: str,
+    lock_paths: list[Path],
+) -> Optional[LockHandle]:
+    if not lock_paths:
         return LockHandle(paths=[], lock_files=[])
     locks_dir = store.db_path.parent / "locks"
     handle = acquire_locks(
-        selected_paths,
+        lock_paths,
         locks_dir=locks_dir,
         task_id=task.id,
         owner=worker_id,
