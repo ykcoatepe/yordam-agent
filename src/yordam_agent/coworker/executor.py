@@ -87,7 +87,12 @@ def apply_plan_with_state(
                 if not approval_matches(plan_hash, approval, checkpoint_id=next_checkpoint):
                     raise ApprovalError("Approval does not match checkpoint.")
             elif not approval_matches(plan_hash, approval):
-                raise ApprovalError("Approval does not match plan hash.")
+                approval_checkpoint = approval.get("checkpoint_id")
+                approval_key = str(approval_checkpoint) if approval_checkpoint is not None else None
+                if not approval_key:
+                    raise ApprovalError("Approval does not match plan hash.")
+                if approval_key not in checkpoint_ids or approval_key not in completed_ids:
+                    raise ApprovalError("Approval does not match plan hash.")
         elif not approval_matches(plan_hash, approval):
             raise ApprovalError("Approval does not match plan hash.")
     results: List[str] = []

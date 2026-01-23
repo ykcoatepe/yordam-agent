@@ -202,12 +202,11 @@ class TestCoworkerExecutor(unittest.TestCase):
             self.assertEqual(state.get("next_checkpoint"), None)
             self.assertFalse(output_c.exists())
 
-            plan_level_approval = build_approval(plan_hash)
             _, resumed_state = apply_plan_with_state(
                 plan,
                 policy,
                 DEFAULT_REGISTRY,
-                approval=plan_level_approval,
+                approval=approval,
                 resume_state=state,
                 stop_at_checkpoints=True,
             )
