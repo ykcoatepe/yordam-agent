@@ -10,7 +10,7 @@ from ..coworker.registry import DEFAULT_REGISTRY
 from ..coworker.run_state import load_state, write_state
 from .locks import LockHandle, acquire_locks
 from .task_bundle import append_event, ensure_task_bundle, update_task_snapshot
-from .task_store import TaskRecord, TaskStore
+from .task_store import ApprovalRecord, TaskRecord, TaskStore
 
 
 @dataclass(frozen=True)
@@ -298,6 +298,8 @@ def _claim_waiting_task(store: TaskStore, *, worker_id: str) -> Optional[TaskRec
         for task in candidates:
             checkpoint_id = task.next_checkpoint
             approval = store.latest_approval(plan_hash=task.plan_hash, checkpoint_id=checkpoint_id)
+            if approval is None and checkpoint_id is None:
+                approval = _resolve_fallback_approval(store, task)
             if approval is None:
                 continue
             if store.claim_task(task.id, expected_state="waiting_approval", worker_id=worker_id):
@@ -349,6 +351,37 @@ def _resolve_approval(
     if approval.checkpoint_id:
         payload["checkpoint_id"] = approval.checkpoint_id
     return payload
+
+
+def _resolve_fallback_approval(store: TaskStore, task: TaskRecord) -> Optional[ApprovalRecord]:
+    plan = _safe_load_plan(task)
+    checkpoint_ids = _checkpoint_ids(plan)
+    if not checkpoint_ids:
+        return None
+    approval = store.latest_approval_any(plan_hash=task.plan_hash)
+    if approval is None:
+        return None
+    if approval.checkpoint_id is None:
+        return approval
+    if str(approval.checkpoint_id) in checkpoint_ids:
+        return approval
+    return None
+
+
+def _safe_load_plan(task: TaskRecord) -> Optional[Dict[str, Any]]:
+    try:
+        return load_plan(_plan_path_for_task(task))
+    except OSError:
+        return None
+
+
+def _checkpoint_ids(plan: Optional[Dict[str, Any]]) -> list[str]:
+    if not plan:
+        return []
+    checkpoints = plan.get("checkpoints", [])
+    if not isinstance(checkpoints, list):
+        return []
+    return [str(item) for item in checkpoints if isinstance(item, (str, int))]
 
 
 def _paths_from_metadata(values: Any) -> list[Path]:

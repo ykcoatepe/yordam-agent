@@ -27,10 +27,12 @@ class TestCoworkerRuntimeDaemon(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "tasks.db"
             store = TaskStore(db_path)
+            plan_path = Path(tmp) / "plan.json"
+            plan_path.write_text(json.dumps({"version": 1, "tool_calls": []}), encoding="utf-8")
             task = store.create_task(
                 plan_hash="sha256:test",
-                plan_path=Path("/tmp/plan.json"),
-                bundle_path=Path("/tmp/bundle"),
+                plan_path=plan_path,
+                bundle_path=Path(tmp) / "bundle",
             )
             store.update_task_state(task.id, state="waiting_approval")
             store.record_approval(
@@ -43,6 +45,40 @@ class TestCoworkerRuntimeDaemon(unittest.TestCase):
             self.assertIsNone(claimed)
 
             store.record_approval(plan_hash="sha256:test", approved_by="tester")
+            claimed = _claim_waiting_task(store, worker_id="worker-1")
+            self.assertIsNotNone(claimed)
+            self.assertEqual(claimed.id, task.id)
+            self.assertEqual(claimed.state, "running")
+
+            store.close()
+
+    def test_claim_waiting_task_accepts_last_checkpoint_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            plan = {
+                "version": 1,
+                "tool_calls": [
+                    {"id": "1", "tool": "fs.read_text", "args": {"path": str(root / "a")}},
+                    {"id": "2", "tool": "fs.read_text", "args": {"path": str(root / "b")}},
+                    {"id": "3", "tool": "fs.read_text", "args": {"path": str(root / "c")}},
+                ],
+                "checkpoints": ["2"],
+            }
+            plan_path = root / "plan.json"
+            plan_path.write_text(json.dumps(plan), encoding="utf-8")
+            store = TaskStore(root / "tasks.db")
+            task = store.create_task(
+                plan_hash=compute_plan_hash(plan),
+                plan_path=plan_path,
+                bundle_path=root / "bundle",
+            )
+            store.update_task_state(task.id, state="waiting_approval", next_checkpoint=None)
+            store.record_approval(
+                plan_hash=task.plan_hash,
+                checkpoint_id="2",
+                approved_by="tester",
+            )
+
             claimed = _claim_waiting_task(store, worker_id="worker-1")
             self.assertIsNotNone(claimed)
             self.assertEqual(claimed.id, task.id)
