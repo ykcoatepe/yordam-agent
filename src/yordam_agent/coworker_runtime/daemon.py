@@ -73,7 +73,13 @@ def _run_task(task: TaskRecord, *, store: TaskStore, worker_id: str) -> bool:
     cfg = load_config()
     selected_paths = _paths_from_metadata(task.metadata.get("selected_paths"))
     extra_roots = _paths_from_metadata(task.metadata.get("allow_roots"))
-    policy = policy_from_config(cfg, selected_paths, extra_roots)
+    allowed_roots = _paths_from_metadata(task.metadata.get("allowed_roots"))
+    policy = policy_from_config(
+        cfg,
+        selected_paths,
+        extra_roots,
+        allowed_roots_override=allowed_roots or None,
+    )
     lock_paths = selected_paths or policy.allowed_roots
     if not lock_paths:
         lock_paths = [store.db_path.parent]

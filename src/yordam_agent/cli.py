@@ -1064,7 +1064,6 @@ def cmd_coworker_runtime_submit(args: argparse.Namespace) -> int:
     plan_hash = ensure_plan_hash(plan)
     write_plan(plan_path, plan)
 
-    store = _runtime_store(cfg, args.state_dir)
     task_id = f"tsk_{uuid.uuid4().hex}"
     bundle_root = (
         Path(args.bundle_root).expanduser().resolve()
@@ -1072,13 +1071,23 @@ def cmd_coworker_runtime_submit(args: argparse.Namespace) -> int:
         else _runtime_state_dir(cfg, args.state_dir) / "bundles" / task_id
     )
 
+    selected_paths = _resolve_coworker_paths(args.paths or [])
+    extra_roots = _resolve_optional_roots(args.allow_root)
+    policy = policy_from_config(cfg, selected_paths, extra_roots)
+    if not policy.allowed_roots:
+        print(
+            "No allowed roots configured. Provide --paths/--allow-root or set "
+            "coworker_allowed_paths."
+        )
+        return 1
+
+    store = _runtime_store(cfg, args.state_dir)
+
     metadata: Dict[str, object] = {}
-    if args.paths:
-        metadata["selected_paths"] = [str(Path(p).expanduser().resolve()) for p in args.paths]
-    if args.allow_root:
-        metadata["allow_roots"] = [
-            str(Path(p).expanduser().resolve()) for p in args.allow_root
-        ]
+    if selected_paths:
+        metadata["selected_paths"] = [str(path) for path in selected_paths]
+    if extra_roots:
+        metadata["allow_roots"] = [str(path) for path in extra_roots]
     if args.metadata:
         try:
             extra = json.loads(args.metadata)
@@ -1087,6 +1096,7 @@ def cmd_coworker_runtime_submit(args: argparse.Namespace) -> int:
             return 1
         if isinstance(extra, dict):
             metadata.update(extra)
+    metadata["allowed_roots"] = [str(path) for path in policy.allowed_roots]
 
     bundle_paths = ensure_task_bundle(
         bundle_root,

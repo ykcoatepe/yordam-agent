@@ -22,17 +22,22 @@ def policy_from_config(
     cfg: Dict[str, Any],
     selected_paths: Iterable[Path],
     extra_roots: Optional[Iterable[Path]] = None,
+    allowed_roots_override: Optional[Iterable[Path]] = None,
 ) -> CoworkerPolicy:
     allowed: List[Path] = []
-    for raw in cfg.get("coworker_allowed_paths", []):
-        allowed.append(Path(raw).expanduser().resolve())
-    for path in selected_paths:
-        resolved = path.expanduser().resolve()
-        allowed.append(resolved.parent if resolved.is_file() else resolved)
-    if extra_roots:
-        for path in extra_roots:
+    if allowed_roots_override is None:
+        for raw in cfg.get("coworker_allowed_paths", []):
+            allowed.append(Path(raw).expanduser().resolve())
+        for path in selected_paths:
             resolved = path.expanduser().resolve()
-            allowed.append(resolved)
+            allowed.append(resolved.parent if resolved.is_file() else resolved)
+        if extra_roots:
+            for path in extra_roots:
+                resolved = path.expanduser().resolve()
+                allowed.append(resolved)
+    else:
+        for path in allowed_roots_override:
+            allowed.append(Path(path).expanduser().resolve())
     deduped = _dedupe_paths(allowed)
     return CoworkerPolicy(
         allowed_roots=deduped,
