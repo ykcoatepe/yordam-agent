@@ -108,6 +108,24 @@ class TestCoworkerTaskStore(unittest.TestCase):
             self.assertIsNone(claimed)
             store.close()
 
+    def test_update_task_state_clears_next_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.db"
+            store = TaskStore(db_path)
+            task = store.create_task(
+                plan_hash="sha256:clear",
+                plan_path=Path("/tmp/plan.json"),
+                bundle_path=Path("/tmp/bundle"),
+            )
+            task = store.update_task_state(
+                task.id, state="waiting_approval", next_checkpoint="cp-final"
+            )
+            self.assertEqual(task.next_checkpoint, "cp-final")
+
+            task = store.update_task_state(task.id, state="waiting_approval", next_checkpoint=None)
+            self.assertIsNone(task.next_checkpoint)
+            store.close()
+
     def test_count_tasks_by_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "tasks.db"

@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+_UNSET = object()
+
 _MIGRATIONS: Dict[int, str] = {
     1: """
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -275,7 +277,7 @@ class TaskStore:
         state: str,
         error: Optional[str] = None,
         checkpoint_id: Optional[str] = None,
-        next_checkpoint: Optional[str] = None,
+        next_checkpoint: Optional[str] | object = _UNSET,
         current_step: Optional[int] = None,
         locked_by: Optional[str] = None,
         locked_at: Optional[str] = None,
@@ -290,7 +292,7 @@ class TaskStore:
         if checkpoint_id is not None:
             fields.append("checkpoint_id = ?")
             values.append(checkpoint_id)
-        if next_checkpoint is not None:
+        if next_checkpoint is not _UNSET:
             fields.append("next_checkpoint = ?")
             values.append(next_checkpoint)
         if current_step is not None:
