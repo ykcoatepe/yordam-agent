@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -76,6 +77,42 @@ class TestCoworkerTaskStore(unittest.TestCase):
 
             claimed_none = store.claim_next_task(worker_id="worker-1")
             self.assertIsNone(claimed_none)
+            store.close()
+
+    def test_requeued_task_moves_behind_others(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "tasks.db"
+            store = TaskStore(db_path)
+            task_one = store.create_task(
+                plan_hash="sha256:a",
+                plan_path=Path("/tmp/plan-a.json"),
+                bundle_path=Path("/tmp/bundle-a"),
+            )
+            task_two = store.create_task(
+                plan_hash="sha256:b",
+                plan_path=Path("/tmp/plan-b.json"),
+                bundle_path=Path("/tmp/bundle-b"),
+            )
+            base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            with store._conn:
+                store._conn.execute(
+                    "UPDATE tasks SET updated_at = ? WHERE id = ?",
+                    ((base_time - timedelta(seconds=5)).isoformat(), task_one.id),
+                )
+                store._conn.execute(
+                    "UPDATE tasks SET updated_at = ? WHERE id = ?",
+                    ((base_time - timedelta(seconds=1)).isoformat(), task_two.id),
+                )
+
+            claimed = store.claim_next_task(worker_id="worker-1")
+            self.assertIsNotNone(claimed)
+            self.assertEqual(claimed.id, task_one.id)
+
+            store.update_task_state(task_one.id, state="queued")
+
+            claimed_next = store.claim_next_task(worker_id="worker-1")
+            self.assertIsNotNone(claimed_next)
+            self.assertEqual(claimed_next.id, task_two.id)
             store.close()
 
     def test_store_persists_across_restart(self) -> None:
