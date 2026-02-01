@@ -1,5 +1,19 @@
 # Optional LaunchAgent (manual)
 
+## Coworker runtime daemon (print-plist)
+
+Generate a LaunchAgent for the coworker runtime daemon:
+
+```bash
+yordam-agent coworker-runtime print-plist > ~/Library/LaunchAgents/com.yordam.agent.coworker-runtime.plist
+```
+
+Use `--program /path/to/yordam-agent` if the binary is not on PATH, and add
+`--enable-runtime-env` if you want the LaunchAgent to set
+`YORDAM_COWORKER_RUNTIME_ENABLED=1`.
+
+Then load/run it with `launchctl` (see steps below).
+
 This is an opt-in, manual LaunchAgent template. It does not run on a schedule by default.
 
 ## Setup

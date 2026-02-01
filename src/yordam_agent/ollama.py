@@ -7,6 +7,22 @@ from typing import Any, Dict, Optional
 
 from .ai_log import append_ai_log, build_log_entry
 
+_DEFAULT_GPT_OSS_THINK_LEVEL = "low"
+_VALID_THINK_LEVELS = {"low", "medium", "high"}
+
+
+def _resolve_think_level(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return _DEFAULT_GPT_OSS_THINK_LEVEL
+    if not isinstance(value, str):
+        return _DEFAULT_GPT_OSS_THINK_LEVEL
+    level = value.strip().lower()
+    if level in {"", "off", "none", "disable", "disabled"}:
+        return None
+    if level in _VALID_THINK_LEVELS:
+        return level
+    return _DEFAULT_GPT_OSS_THINK_LEVEL
+
 
 class OllamaClient:
     def __init__(
@@ -15,11 +31,13 @@ class OllamaClient:
         log_path: Optional[Path] = None,
         *,
         fallback_model: Optional[str] = None,
+        gpt_oss_think_level: Optional[str] = None,
         log_include_response: bool = False,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.log_path = log_path
         self.fallback_model = fallback_model
+        self.gpt_oss_think_level = _resolve_think_level(gpt_oss_think_level)
         self.log_include_response = log_include_response
 
     def generate(
@@ -79,6 +97,9 @@ class OllamaClient:
             "prompt": prompt,
             "stream": False,
         }
+        think_level = self._think_level_for_model(model)
+        if think_level:
+            payload["think"] = think_level
         if system:
             payload["system"] = system
         if temperature is not None:
@@ -180,3 +201,8 @@ class OllamaClient:
             include_response=self.log_include_response,
         )
         append_ai_log(self.log_path, entry)
+
+    def _think_level_for_model(self, model: str) -> Optional[str]:
+        if model.lower().startswith("gpt-oss"):
+            return self.gpt_oss_think_level
+        return None
